@@ -5,7 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
-	"io"
+	//"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -161,9 +161,11 @@ func (fp *FileProcessor) calculateTradeMetrics(records [][]string) map[string]in
 	headers := records[0]
 	
 	// Try to find common column names
-	pnlIdx := -1
-	priceIdx := -1
-	qtyIdx := -1
+		pnlIdx := -1
+		priceIdx := -1
+		qtyIdx := -1
+		_ = priceIdx
+		_ = qtyIdx
 	
 	for i, header := range headers {
 		lower := strings.ToLower(header)

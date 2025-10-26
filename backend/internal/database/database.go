@@ -161,7 +161,7 @@ func (db *DB) CreateUser(username, passwordHash string) (*models.User, error) {
 func (db *DB) GetUserByUsername(username string) (*models.User, error) {
 	user := &models.User{}
 	err := db.conn.QueryRow(
-		"SELECT id, username, password_hash, two_fa_enabled, two_fa_secret, created_at FROM users WHERE username = ?",
+		"SELECT id, username, password_hash, two_fa_enabled, COALESCE(two_fa_secret, ''), created_at FROM users WHERE username = ?",
 		username,
 	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.TwoFAEnabled, &user.TwoFASecret, &user.CreatedAt)
 
@@ -174,7 +174,7 @@ func (db *DB) GetUserByUsername(username string) (*models.User, error) {
 func (db *DB) GetUserByID(id int) (*models.User, error) {
 	user := &models.User{}
 	err := db.conn.QueryRow(
-		"SELECT id, username, password_hash, two_fa_enabled, two_fa_secret, created_at FROM users WHERE id = ?",
+		"SELECT id, username, password_hash, two_fa_enabled, COALESCE(two_fa_secret, ''), created_at FROM users WHERE id = ?",
 		id,
 	).Scan(&user.ID, &user.Username, &user.PasswordHash, &user.TwoFAEnabled, &user.TwoFASecret, &user.CreatedAt)
 

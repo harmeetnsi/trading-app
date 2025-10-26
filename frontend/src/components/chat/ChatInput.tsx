@@ -65,10 +65,12 @@ export default function ChatInput({ onSend, disabled }: ChatInputProps) {
         </button>
 
         <input
-          type="text"
-          value={message}
+  	type="text"
+ 	 id="chat-message"
+  	name="message"
+  	value={message}
           onChange={(e) => setMessage(e.target.value)}
-          placeholder="Type a message..."
+          placeholder="Chat with Me..."
           className="flex-1 px-4 py-2 border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
           disabled={disabled}
         />

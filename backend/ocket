@@ -1,0 +1,19 @@
+[0;1;32m●[0m trading-backend.service - Trading App Backend
+     Loaded: loaded (]8;;file://vps3111468/etc/systemd/system/trading-backend.service/etc/systemd/system/trading-backend.service]8;;; [0;1;32menabled[0m; preset: [0;1;32menabled[0m)
+     Active: [0;1;32mactive (running)[0m since Sun 2025-10-26 15:42:32 IST; 1min 28s ago
+   Main PID: 183281 (trading-server)
+      Tasks: 6 (limit: 2267)
+     Memory: 8.0M (peak: 8.2M)
+        CPU: 1min 8.965s
+     CGroup: /system.slice/trading-backend.service
+             └─[0;38;5;245m183281 /root/trading-app/backend/trading-server[0m
+
+Oct 26 15:42:32 vps3111468 systemd[1]: Started trading-backend.service - Trading App Backend.
+Oct 26 15:42:32 vps3111468 trading-server[183281]: 2025/10/26 15:42:32 Server starting on :8080
+Oct 26 15:42:32 vps3111468 trading-server[183281]: 2025/10/26 15:42:32 OpenAlgo URL: https://openalgo.mywire.org
+Oct 26 15:42:32 vps3111468 trading-server[183281]: 2025/10/26 15:42:32 Database: ./data/trading.db
+Oct 26 15:42:32 vps3111468 trading-server[183281]: 2025/10/26 15:42:32 Upload directory: ./data/uploads
+Oct 26 15:42:36 vps3111468 trading-server[183281]: 2025/10/26 15:42:36 Client registered: 1
+Oct 26 15:42:36 vps3111468 trading-server[183281]: 2025/10/26 15:42:36 Client registered: 1
+Oct 26 15:42:37 vps3111468 trading-server[183281]: 2025/10/26 15:42:37 Client registered: 1
+Oct 26 15:42:37 vps3111468 trading-server[183281]: 2025/10/26 15:42:37 Client registered: 1

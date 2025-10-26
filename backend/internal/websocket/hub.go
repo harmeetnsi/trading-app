@@ -15,10 +15,10 @@ type Hub struct {
 	broadcast chan []byte
 
 	// Register requests from clients
-	register chan *Client
+	Register chan *Client
 
 	// Unregister requests from clients
-	unregister chan *Client
+	Unregister chan *Client
 
 	// Mutex for thread-safe operations
 	mu sync.RWMutex
@@ -29,8 +29,8 @@ func NewHub() *Hub {
 	return &Hub{
 		clients:    make(map[*Client]bool),
 		broadcast:  make(chan []byte, 256),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		Register:   make(chan *Client),
+		Unregister: make(chan *Client),
 	}
 }
 
@@ -38,13 +38,13 @@ func NewHub() *Hub {
 func (h *Hub) Run() {
 	for {
 		select {
-		case client := <-h.register:
+		case client := <-h.Register:
 			h.mu.Lock()
 			h.clients[client] = true
 			h.mu.Unlock()
 			log.Printf("Client registered: %d", client.userID)
 
-		case client := <-h.unregister:
+		case client := <-h.Unregister:
 			h.mu.Lock()
 			if _, ok := h.clients[client]; ok {
 				delete(h.clients, client)

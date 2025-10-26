@@ -25,7 +25,7 @@ func NewAIClient(apiKey string) *AIClient {
 	// Using Abacus.AI LLM API
 	return &AIClient{
 		apiKey: apiKey,
-		apiURL: "https://api.abacus.ai/api/v0/chat/completions",
+		apiURL: "https://routellm.abacus.ai/v1/chat/completions",
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -80,7 +80,7 @@ func (ai *AIClient) GetChatResponse(userMessage, context string) (string, error)
 	})
 
 	request := ChatRequest{
-		Model:    "gpt-4",
+		Model:    "gemini-2.5-pro",
 		Messages: messages,
 		Stream:   false,
 	}

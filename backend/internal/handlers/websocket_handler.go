@@ -61,7 +61,7 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 	client := wsocket.NewClient(h.hub, conn, userID, h.db, h.aiClient)
 
 	// Register client
-	h.hub.register <- client
+	h.hub.Register <- client
 
 	// Start client goroutines
 	go client.WritePump()

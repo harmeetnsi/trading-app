@@ -61,6 +61,7 @@ export default function ChatPage() {
 
     socket.onopen = () => {
       console.log('WebSocket connected');
+      setWs(socket);
     };
 
     socket.onmessage = (event) => {
@@ -93,8 +94,6 @@ export default function ChatPage() {
         connectWebSocket();
       }, 3000);
     };
-
-    setWs(socket);
   };
 
   const handleSendMessage = async (message: string, file?: File) => {
