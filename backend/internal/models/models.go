@@ -114,3 +114,27 @@ type Portfolio struct {
 	TotalPnLPercent float64  `json:"total_pnl_percent"`
 	Positions       []Position `json:"positions"`
 }
+
+// OpenPosition represents a currently held position in the portfolio
+type OpenPosition struct {
+	UserID     int       `json:"user_id"`
+	Symbol     string    `json:"symbol"`
+	Exchange   string    `json:"exchange"`
+	Quantity   int       `json:"quantity"`
+	EntryPrice float64   `json:"entry_price"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+// AutoOrder represents a running background conditional order
+type AutoOrder struct {
+	ID        string    `json:"id"`        // Unique ID for tracking/cancellation
+	UserID    int       `json:"user_id"`
+	Symbol    string    `json:"symbol"`
+	Exchange  string    `json:"exchange"`
+	Quantity  int       `json:"quantity"`
+	Action    string    `json:"action"`
+	Interval  string    `json:"interval"`
+	Condition string    `json:"condition"`
+	Status    string    `json:"status"`    // e.g., "running", "executed", "cancelled"
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"` // New: Defines when monitoring stops
+}

@@ -1,8 +1,10 @@
 package handlers
 
 import (
-	"fmt" // FIX: Added missing import
+	"fmt" 
+	"log" // Added log for the fixed functions below
 	"net/http"
+	"strings" // Added strings for safety
 
 	"trading-app/internal/database"
 	"trading-app/internal/models"
@@ -22,46 +24,22 @@ func NewPortfolioHandler(db *database.DB, openalgoClient *openalgo.OpenAlgoClien
 	}
 }
 
-// GetPortfolio retrieves portfolio data from OpenAlgo
+// GetPortfolio retrieves portfolio data from OpenAlgo (Kept as Not Implemented)
 func (h *PortfolioHandler) GetPortfolio(w http.ResponseWriter, r *http.Request) {
-	// FIX: This function is commented out because CalculatePortfolio is not defined
-	// in the new openalgo/client.go file. It needs to be re-implemented if required.
 	utils.ErrorResponse(w, http.StatusNotImplemented, "GetPortfolio is not yet implemented after refactoring.")
-	// portfolio, err := h.openalgo.CalculatePortfolio()
-	// if err != nil {
-	// 	utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve portfolio: "+err.Error())
-	// 	return
-	// }
-	// utils.SuccessResponse(w, "Portfolio retrieved", portfolio)
 }
 
-// GetPositions retrieves current positions
+// GetPositions retrieves current positions (Kept as Not Implemented)
 func (h *PortfolioHandler) GetPositions(w http.ResponseWriter, r *http.Request) {
-	// FIX: This function is commented out because GetPositions is not defined
-	// in the new openalgo/client.go file. It needs to be re-implemented if required.
 	utils.ErrorResponse(w, http.StatusNotImplemented, "GetPositions is not yet implemented after refactoring.")
-	// positions, err := h.openalgo.GetPositions()
-	// if err != nil {
-	// 	utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve positions: "+err.Error())
-	// 	return
-	// }
-	// utils.SuccessResponse(w, "Positions retrieved", positions)
 }
 
-// GetHoldings retrieves current holdings
+// GetHoldings retrieves current holdings (Kept as Not Implemented)
 func (h *PortfolioHandler) GetHoldings(w http.ResponseWriter, r *http.Request) {
-	// FIX: This function is commented out because GetHoldings is not defined
-	// in the new openalgo/client.go file. It needs to be re-implemented if required.
 	utils.ErrorResponse(w, http.StatusNotImplemented, "GetHoldings is not yet implemented after refactoring.")
-	// holdings, err := h.openalgo.GetHoldings()
-	// if err != nil {
-	// 	utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve holdings: "+err.Error())
-	// 	return
-	// }
-	// utils.SuccessResponse(w, "Holdings retrieved", holdings)
 }
 
-// PlaceOrder places a new order
+// PlaceOrder places a new order (Kept Unchanged)
 func (h *PortfolioHandler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id").(int)
 
@@ -119,8 +97,8 @@ func (h *PortfolioHandler) GetQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// NOTE: GetQuote is implemented using the public method FetchOpenAlgoQuote
-	quote, err := h.openalgo.FetchOpenAlgoQuote(symbol) // Assuming exchange is implicitly handled or not needed
+	// --- FIX: Pass the exchange argument (this was missing) ---
+	quote, err := h.openalgo.FetchOpenAlgoQuote(strings.ToUpper(symbol), strings.ToUpper(exchange)) 
 	if err != nil {
 		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve quote: "+err.Error())
 		return
@@ -129,23 +107,102 @@ func (h *PortfolioHandler) GetQuote(w http.ResponseWriter, r *http.Request) {
 	utils.SuccessResponse(w, "Quote retrieved", quote)
 }
 
+// --- FIX: Added the missing function that caused compile error (using default exchange) ---
+// HandlePortfolioValue retrieves the current valuation of the user's portfolio
+func (h *PortfolioHandler) HandlePortfolioValue(w http.ResponseWriter, r *http.Request) {
+    userID := r.Context().Value("user_id").(int)
+    positions, err := h.db.GetOpenPositionsByUserID(userID)
+    if err != nil {
+        utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve portfolio positions")
+        return
+    }
+
+    var totalPortfolioValue float64
+    for _, pos := range positions {
+        // --- FIX: Pass default exchange "NSE" to FetchOpenAlgoQuote ---
+        quote, err := h.openalgo.FetchOpenAlgoQuote(pos.Symbol, "NSE")
+        if err != nil {
+            log.Printf("Warning: Failed to fetch quote for %s: %v", pos.Symbol, err)
+            continue 
+        }
+        totalPortfolioValue += quote.LTP * float64(pos.Quantity)
+    }
+
+    result := map[string]interface{}{
+        "total_value": totalPortfolioValue,
+        "position_count": len(positions),
+    }
+
+    utils.SuccessResponse(w, "Portfolio valuation complete", result)
+}
+
+// --- FIX: Added the missing function that caused compile error (using default exchange) ---
+// HandlePortfolioSignal checks if a condition is met for every symbol in the portfolio
+func (h *PortfolioHandler) HandlePortfolioSignal(w http.ResponseWriter, r *http.Request) {
+    userID := r.Context().Value("user_id").(int)
+    condition := r.URL.Query().Get("pine_condition")
+    if condition == "" {
+        utils.ErrorResponse(w, http.StatusBadRequest, "Missing 'pine_condition' parameter")
+        return
+    }
+
+    positions, err := h.db.GetOpenPositionsByUserID(userID)
+    if err != nil {
+        utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve portfolio positions")
+        return
+    }
+
+    if len(positions) == 0 {
+        utils.SuccessResponse(w, "No open positions found in portfolio", nil)
+        return
+    }
+
+    signalResults := make(map[string]bool)
+    defaultExchange := "NSE"
+
+    for _, pos := range positions {
+        symbol := pos.Symbol
+        // --- FIX: Pass condition, symbol, AND the default exchange "NSE" ---
+        isMet, _, err := h.openalgo.EvaluatePineCondition(condition, strings.ToUpper(symbol), defaultExchange)
+        if err != nil {
+            log.Printf("Signal evaluation failed for %s on %s: %v", symbol, defaultExchange, err)
+            signalResults[symbol] = false 
+            continue
+        }
+        signalResults[symbol] = isMet
+    }
+
+    result := map[string]interface{}{
+        "condition": condition,
+        "results":   signalResults,
+    }
+
+    utils.SuccessResponse(w, "Portfolio signal evaluation complete", result)
+}
+
+
 // HandleSignalTest is the unprotected test route for /signal we added in main.go
 func (h *PortfolioHandler) HandleSignalTest(w http.ResponseWriter, r *http.Request) {
 	symbol := r.URL.Query().Get("symbol")
 	condition := r.URL.Query().Get("pine_condition")
+    exchange := r.URL.Query().Get("exchange") // New: read exchange
+    
+    if exchange == "" {
+        exchange = "NSE" // Default exchange
+    }
 
 	if symbol == "" || condition == "" {
 		utils.ErrorResponse(w, http.StatusBadRequest, "Symbol and pine_condition are required")
 		return
 	}
 
-	// Execute the new logic for fetching data (Step A completed)
-	isConditionMet, err := h.openalgo.EvaluatePineCondition(condition, symbol)
+	// --- FIX: Pass the exchange argument (this was missing) ---
+	isConditionMet, _, err := h.openalgo.EvaluatePineCondition(condition, strings.ToUpper(symbol), strings.ToUpper(exchange))
 	if err != nil {
 		utils.ErrorResponse(w, http.StatusInternalServerError, "Evaluation failed: "+err.Error())
 		return
 	}
 
-	result := fmt.Sprintf("Condition met: %t (Symbol: %s, Condition: %s)", isConditionMet, symbol, condition)
+	result := fmt.Sprintf("Condition met: %t (Symbol: %s, Condition: %s, Exchange: %s)", isConditionMet, symbol, condition, exchange)
 	utils.SuccessResponse(w, "Signal evaluation complete", result)
 }

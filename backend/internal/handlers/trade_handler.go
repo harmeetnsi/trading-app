@@ -59,15 +59,19 @@ func (h *TradeHandler) HandleSignal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Optional: Get interval, defaulting to 5m (which we fixed in openalgo/client.go)
-	// interval := r.URL.Query().Get("interval") 
-	// exchange := r.URL.Query().Get("exchange")
+	// --- NEW LOGIC: Read Exchange (Optional) ---
+	// Get exchange from query, defaulting to "NSE" if not provided.
+	exchange := r.URL.Query().Get("exchange")
+	if exchange == "" {
+		exchange = "NSE"
+	}
 
-	// 2. Call the core evaluation logic (the function you fixed!)
-	isConditionMet, err := h.openalgo.EvaluatePineCondition(condition, strings.ToUpper(symbol))
+	// 2. Call the core evaluation logic (Now includes the exchange!)
+	// Note the addition of the 'exchange' argument here:
+	isConditionMet, _, err := h.openalgo.EvaluatePineCondition(condition, strings.ToUpper(symbol), strings.ToUpper(exchange))
 	if err != nil {
 		// Log the error internally
-		log.Printf("Signal evaluation failed for %s: %v", symbol, err)
+		log.Printf("Signal evaluation failed for %s on %s: %v", symbol, exchange, err)
 		// Return a clean error message to the user
 		utils.ErrorResponse(w, http.StatusInternalServerError, fmt.Sprintf("Signal evaluation failed: %v", err.Error()))
 		return
@@ -75,10 +79,11 @@ func (h *TradeHandler) HandleSignal(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Return the result
 	result := map[string]interface{}{
-		"symbol": symbol,
-		"condition": condition,
+		"symbol":     symbol,
+		"exchange":   exchange, // Include exchange in the response
+		"condition":  condition,
 		"signal_met": isConditionMet,
-		"message": fmt.Sprintf("Condition '%s' for %s is %t", condition, symbol, isConditionMet),
+		"message":    fmt.Sprintf("Condition '%s' for %s on %s is %t", condition, symbol, exchange, isConditionMet),
 	}
 
 	utils.SuccessResponse(w, "Signal evaluation complete", result)

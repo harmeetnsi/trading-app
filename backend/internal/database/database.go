@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"log"
 	"time"
-
+	"trading-app/internal/models" // <--- ADD THIS LINE
 	_ "github.com/mattn/go-sqlite3"
-	"trading-app/internal/models"
-)
+	 
+	)
 
 type DB struct {
 	conn *sql.DB
@@ -528,4 +528,30 @@ func (db *DB) Initialize(username, passwordHash string) error {
 	}
 
 	return nil
+}
+
+// GetOpenPositionsByUserID retrieves all open positions for a given user ID
+func (db *DB) GetOpenPositionsByUserID(userID int) ([]*models.OpenPosition, error) {
+	// NOTE: This is a simplified mock implementation for development/testing
+	// In a real application, this would query a persistent store (e.g., PostgreSQL, OpenAlgo)
+	log.Printf("DB: Fetching open positions for UserID %d (using mock data)", userID)
+
+	// Since you are trading with TCS and RELIANCE in your examples, 
+	// we will use them as mock positions.
+	return []*models.OpenPosition{
+		{
+			UserID:   userID,
+			Symbol:   "TCS",
+			Exchange: "NSE",
+			Quantity: 10,
+			EntryPrice: 3800.0,
+		},
+		{
+			UserID:   userID,
+			Symbol:   "RELIANCE",
+			Exchange: "NSE",
+			Quantity: 5,
+			EntryPrice: 2800.0,
+		},
+	}, nil
 }

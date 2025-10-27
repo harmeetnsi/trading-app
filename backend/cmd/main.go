@@ -19,7 +19,7 @@ import (
 
 func main() {
 	// Load environment variables
-	dbPath := getEnv("DB_PATH", "./data/trading.db")
+	dbPath := getEnv("DB_PATH", "/root/trading-app/backend/data/trading.db")
 	uploadDir := getEnv("UPLOAD_DIR", "./data/uploads")
 	port := getEnv("PORT", "8080")
 	// FIX: Ensure these are declared correctly for use below
