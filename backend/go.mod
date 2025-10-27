@@ -1,12 +1,16 @@
 module trading-app
 
-go 1.21
+go 1.23.2
+
+toolchain go1.24.9
 
 require (
+	github.com/Knetic/govaluate v3.0.0+incompatible
 	github.com/golang-jwt/jwt/v5 v5.2.0
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.1
 	github.com/ledongthuc/pdf v0.0.0-20220302134840-0c2507a12d80
+	github.com/markcheno/go-talib v0.0.0-20250114000313-ec55a20c902f
 	github.com/mattn/go-sqlite3 v1.14.19
 	github.com/rs/cors v1.10.1
 	github.com/xuri/excelize/v2 v2.8.0

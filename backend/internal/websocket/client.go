@@ -2,23 +2,17 @@ package websocket
 
 import (
 	"encoding/json"
-	"fmt" // Keep fmt for Sprintf
+	"fmt"
 	"log"
-	// "net/http" // No longer needed here
-	// "os" // No longer needed here
 	"strconv"
 	"strings"
 	"time"
-	// Keep math/indicator imports commented out for now
-	// "math"
-	// indicator "github.com/some-indicator-library" // Placeholder
 
 	"github.com/gorilla/websocket"
 	"trading-app/internal/ai"
 	"trading-app/internal/database"
 	"trading-app/internal/models"
-	// Keep govaluate commented out
-	// "github.com/Knetic/govaluate"
+	"trading-app/internal/openalgo" // Note: Corrected import
 )
 
 const (
@@ -35,18 +29,16 @@ const (
 	maxMessageSize = 512 * 1024 // 512 KB
 )
 
-// --- REMOVED OpenAlgo Config (moved to openalgo_client.go) ---
-
 // Client represents a websocket client
 type Client struct {
-	hub *Hub
-	conn *websocket.Conn
-	send chan []byte
-	userID int
-	db *database.DB
-	ai *ai.AIClient
+	hub      *Hub
+	conn     *websocket.Conn
+	send     chan []byte
+	userID   int
+	db       *database.DB
+	ai       *ai.AIClient
 	// --- NEW: Add OpenAlgo Client ---
-	oaClient *OpenAlgoClient
+	oaClient *openalgo.OpenAlgoClient
 }
 
 // Message represents a websocket message
@@ -58,16 +50,16 @@ type Message struct {
 }
 
 // NewClient creates a new websocket client
-func NewClient(hub *Hub, conn *websocket.Conn, userID int, db *database.DB, aiClient *ai.AIClient) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, userID int, db *database.DB, aiClient *ai.AIClient, baseURL string, apiKey string) *Client {
 	return &Client{
-		hub:    hub,
-		conn:   conn,
-		send:   make(chan []byte, 256),
-		userID: userID,
-		db:     db,
-		ai:     aiClient,
+		hub:      hub,
+		conn:     conn,
+		send:     make(chan []byte, 256),
+		userID:   userID,
+		db:       db,
+		ai:       aiClient,
 		// --- NEW: Initialize OpenAlgo Client ---
-		oaClient: NewOpenAlgoClient(), // Assumes NewOpenAlgoClient is defined in openalgo_client.go
+		oaClient: openalgo.NewOpenAlgoClient(baseURL, apiKey), 
 	}
 }
 
@@ -216,7 +208,7 @@ func (c *Client) handleTradingCommand(command string) {
 			if len(parts) == 2 {
 				symbol := strings.ToUpper(parts[1])
 				// --- MODIFIED: Use oaClient ---
-				quote, err := c.oaClient.fetchOpenAlgoQuote(symbol) // Calls function from openalgo_client.go
+				quote, err := c.oaClient.FetchOpenAlgoQuote(symbol) // Calls function from openalgo/client.go
 				if err != nil {
 					log.Printf("Failed to fetch quote for %s: %v", symbol, err)
 					responseContent = fmt.Sprintf("Sorry, I had trouble fetching the quote for %s: %v", symbol, err)
@@ -242,7 +234,7 @@ func (c *Client) handleTradingCommand(command string) {
 				if err != nil || quantity <= 0 {
 					responseContent = "Invalid quantity. Must be a positive number."
 				} else {
-					orderReq := &OpenAlgoSmartOrderRequest{ // Struct definition is now in openalgo_client.go
+					orderReq := &openalgo.OpenAlgoSmartOrderRequest{ // Struct definition is in openalgo/client.go
 						// Apikey: Handled by oaClient
 						Strategy:     "manual_chat",
 						Symbol:       symbol,
@@ -254,7 +246,7 @@ func (c *Client) handleTradingCommand(command string) {
 						PositionSize: 0,
 					}
 					// --- MODIFIED: Use oaClient ---
-					orderResponse, err := c.oaClient.placeOpenAlgoSmartOrder(orderReq) // Calls function from openalgo_client.go
+					orderResponse, err := c.oaClient.PlaceOpenAlgoSmartOrder(orderReq) // Calls function from openalgo/client.go
 					if err != nil {
 						log.Printf("Failed to place %s smart order for %s: %v", action, symbol, err)
 						responseContent = fmt.Sprintf("❌ Sorry, I had trouble placing your %s smart order: %v", action, err)
@@ -270,11 +262,15 @@ func (c *Client) handleTradingCommand(command string) {
 			}
 
 		case "/rsi":
+			// --- NEW: Redirect /rsi to /signal ---
 			if len(parts) == 2 {
 				symbol := strings.ToUpper(parts[1])
-				responseContent = fmt.Sprintf("RSI calculation for %s is not implemented yet. Try `/price %s`.", symbol, symbol)
+				responseContent = fmt.Sprintf(
+					"The simple `/rsi` command is deprecated. Please use the powerful **`/signal`** command for live evaluations, e.g.:\n\n- `/signal %s (RSI < 30)`\n- `/signal %s (RSI > 70 and close > open)`",
+					symbol, symbol,
+				)
 			} else {
-				responseContent = "Usage: `/rsi <SYMBOL>`"
+				responseContent = "Usage: `/rsi <SYMBOL>`. Command deprecated. Use `/signal` instead."
 			}
 
 		case "/signal":
@@ -282,20 +278,20 @@ func (c *Client) handleTradingCommand(command string) {
 				symbol := strings.ToUpper(parts[1])
 				condition := strings.Join(parts[2:], " ")
 				log.Printf("Received signal command for %s with condition: %s", symbol, condition)
-				// --- MODIFIED: Use oaClient ---
-				isConditionMet, err := c.oaClient.evaluatePineCondition(condition, symbol) // Calls function from openalgo_client.go
+				// --- MODIFIED: Use oaClient to run full evaluation logic ---
+				isConditionMet, err := c.oaClient.EvaluatePineCondition(condition, symbol) // Calls function from openalgo/client.go
 				if err != nil {
 					log.Printf("Error evaluating condition for %s: %v", symbol, err)
 					responseContent = fmt.Sprintf("⚠️ Error evaluating signal for %s: %v", symbol, err)
 				} else {
 					if isConditionMet {
-						responseContent = fmt.Sprintf("✅ Signal condition met for %s: `%s` (Evaluation Logic Placeholder)", symbol, condition)
+						responseContent = fmt.Sprintf("✅ **Signal Condition Met** for %s: `%s`", symbol, condition)
 					} else {
-						responseContent = fmt.Sprintf("❌ Signal condition NOT met for %s: `%s` (Evaluation Logic Placeholder)", symbol, condition)
+						responseContent = fmt.Sprintf("❌ Signal Condition **NOT** Met for %s: `%s`", symbol, condition)
 					}
 				}
 			} else {
-				responseContent = "Usage: `/signal <SYMBOL> <PINE_SCRIPT_CONDITION>`"
+				responseContent = "Usage: `/signal <SYMBOL> <PINE_SCRIPT_CONDITION>` (e.g., `/signal RELIANCE (RSI < 30)`) - Use 'RSI' as the indicator variable."
 			}
 
 		default:
@@ -335,11 +331,9 @@ func (c *Client) handleTradingCommand(command string) {
 	c.send <- assistMsgBytes
 }
 
-// --- REMOVED OpenAlgo Structs and API call functions (moved to openalgo_client.go) ---
-
-
 // processAIResponse gets AI response and sends it to the client
 func (c *Client) processAIResponse(userMessage string, fileID *int) {
+	// [AI processing logic remains unchanged]
 	// Get chat history for context
 	history, err := c.db.GetChatMessagesByUserID(c.userID, 10) // Get last 10 messages
 	if err != nil {
@@ -381,7 +375,7 @@ func (c *Client) processAIResponse(userMessage string, fileID *int) {
 			log.Printf("Failed to save AI message: %v", saveErr)
 			// Don't stop the user from getting the response
 		} else {
-		  // --- Use the actual ID from the saved message ---
+			// --- Use the actual ID from the saved message ---
 			aiMsgResponse := Message{
 				Type:    "chat",
 				Content: aiResponse,
@@ -411,7 +405,7 @@ func (c *Client) processAIResponse(userMessage string, fileID *int) {
 		Type:    "chat",
 		Content: aiResponse, // Send the AI response (or error message)
 		Data: map[string]interface{}{
-			"id":         0,          // Use 0 if saving failed
+			"id":         0,        // Use 0 if saving failed
 			"role":       "assistant",
 			"created_at": time.Now(),
 		},
@@ -434,4 +428,3 @@ func (c *Client) sendError(errMsg string) {
 		log.Printf("Failed to marshal error message: %v", err)
 	}
 }
-

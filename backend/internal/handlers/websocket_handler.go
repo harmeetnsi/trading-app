@@ -1,4 +1,3 @@
-
 package handlers
 
 import (
@@ -21,16 +20,20 @@ var upgrader = websocket.Upgrader{
 }
 
 type WebSocketHandler struct {
-	hub      *wsocket.Hub
-	db       *database.DB
-	aiClient *ai.AIClient
+	hub            *wsocket.Hub
+	db             *database.DB
+	aiClient       *ai.AIClient
+	openalgoURL    string
+	openalgoAPIKey string
 }
 
-func NewWebSocketHandler(hub *wsocket.Hub, db *database.DB, aiClient *ai.AIClient) *WebSocketHandler {
+func NewWebSocketHandler(hub *wsocket.Hub, db *database.DB, aiClient *ai.AIClient, openalgoURL string, openalgoAPIKey string) *WebSocketHandler {
 	return &WebSocketHandler{
-		hub:      hub,
-		db:       db,
-		aiClient: aiClient,
+		hub:            hub,
+		db:             db,
+		aiClient:       aiClient,
+		openalgoURL:    openalgoURL,
+		openalgoAPIKey: openalgoAPIKey,
 	}
 }
 
@@ -57,8 +60,15 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Create new client
-	client := wsocket.NewClient(h.hub, conn, userID, h.db, h.aiClient)
+	client := wsocket.NewClient(
+		h.hub,
+		conn,
+		userID,
+		h.db,
+		h.aiClient,
+		h.openalgoURL,
+		h.openalgoAPIKey,
+	)
 
 	// Register client
 	h.hub.Register <- client

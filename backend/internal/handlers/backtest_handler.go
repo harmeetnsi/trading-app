@@ -1,4 +1,3 @@
-
 package handlers
 
 import (
@@ -12,13 +11,14 @@ import (
 )
 
 type BacktestHandler struct {
-	db         *database.DB
+	db          *database.DB
 	backtester *strategy.Backtester
 }
 
-func NewBacktestHandler(db *database.DB, openalgoClient *openalgo.Client) *BacktestHandler {
+// FIX: Renamed the parameter type from openalgo.Client to openalgo.OpenAlgoClient
+func NewBacktestHandler(db *database.DB, openalgoClient *openalgo.OpenAlgoClient) *BacktestHandler {
 	return &BacktestHandler{
-		db:         db,
+		db:          db,
 		backtester: strategy.NewBacktester(db, openalgoClient),
 	}
 }

@@ -1,4 +1,3 @@
-
 package strategy
 
 import (
@@ -14,42 +13,42 @@ import (
 
 // Backtester runs backtests on trading strategies
 type Backtester struct {
-	db       *database.DB
-	openalgo *openalgo.Client
+	db *database.DB
+	openalgo *openalgo.OpenAlgoClient // CORRECTED: Changed 'Client' to 'OpenAlgoClient'
 }
 
 // NewBacktester creates a new backtester
-func NewBacktester(db *database.DB, openalgoClient *openalgo.Client) *Backtester {
+func NewBacktester(db *database.DB, openalgoClient *openalgo.OpenAlgoClient) *Backtester { // CORRECTED: Changed 'Client' to 'OpenAlgoClient'
 	return &Backtester{
-		db:       db,
+		db: db,
 		openalgo: openalgoClient,
 	}
 }
 
 // BacktestParams represents backtest parameters
 type BacktestParams struct {
-	StrategyID     int       `json:"strategy_id"`
-	StartDate      time.Time `json:"start_date"`
-	EndDate        time.Time `json:"end_date"`
-	InitialCapital float64   `json:"initial_capital"`
-	Symbol         string    `json:"symbol"`
-	Exchange       string    `json:"exchange"`
+	StrategyID int `json:"strategy_id"`
+	StartDate time.Time `json:"start_date"`
+	EndDate time.Time `json:"end_date"`
+	InitialCapital float64 `json:"initial_capital"`
+	Symbol string `json:"symbol"`
+	Exchange string `json:"exchange"`
 }
 
 // BacktestTrade represents a trade in the backtest
 type BacktestTrade struct {
 	Timestamp time.Time `json:"timestamp"`
-	Action    string    `json:"action"`
-	Price     float64   `json:"price"`
-	Quantity  int       `json:"quantity"`
-	PnL       float64   `json:"pnl"`
+	Action string `json:"action"`
+	Price float64 `json:"price"`
+	Quantity int `json:"quantity"`
+	PnL float64 `json:"pnl"`
 }
 
 // BacktestMetrics contains detailed backtest metrics
 type BacktestMetrics struct {
-	Trades          []BacktestTrade `json:"trades"`
-	EquityCurve     []float64       `json:"equity_curve"`
-	DrawdownCurve   []float64       `json:"drawdown_curve"`
+	Trades []BacktestTrade `json:"trades"`
+	EquityCurve []float64 `json:"equity_curve"`
+	DrawdownCurve []float64 `json:"drawdown_curve"`
 }
 
 // RunBacktest executes a backtest
@@ -68,7 +67,7 @@ func (b *Backtester) RunBacktest(params BacktestParams) (*models.BacktestResult,
 	// 1. Fetch historical data from OpenAlgo/broker
 	// 2. Parse and execute the strategy code
 	// 3. Simulate trades based on strategy signals
-	
+
 	// Simplified simulation
 	trades, metrics := b.simulateStrategy(params)
 
@@ -97,18 +96,18 @@ func (b *Backtester) RunBacktest(params BacktestParams) (*models.BacktestResult,
 
 	// Create backtest result
 	result := &models.BacktestResult{
-		StrategyID:     params.StrategyID,
-		StartDate:      params.StartDate,
-		EndDate:        params.EndDate,
+		StrategyID: params.StrategyID,
+		StartDate: params.StartDate,
+		EndDate: params.EndDate,
 		InitialCapital: params.InitialCapital,
-		FinalCapital:   metrics.EquityCurve[len(metrics.EquityCurve)-1],
-		TotalReturn:    returnPercent,
-		TotalTrades:    len(trades),
-		WinningTrades:  winningTrades,
-		LosingTrades:   losingTrades,
-		MaxDrawdown:    maxDrawdown,
-		SharpeRatio:    sharpeRatio,
-		ResultData:     string(metricsJSON),
+		FinalCapital: metrics.EquityCurve[len(metrics.EquityCurve)-1],
+		TotalReturn: returnPercent,
+		TotalTrades: len(trades),
+		WinningTrades: winningTrades,
+		LosingTrades: losingTrades,
+		MaxDrawdown: maxDrawdown,
+		SharpeRatio: sharpeRatio,
+		ResultData: string(metricsJSON),
 	}
 
 	// Save to database
@@ -124,11 +123,11 @@ func (b *Backtester) RunBacktest(params BacktestParams) (*models.BacktestResult,
 func (b *Backtester) simulateStrategy(params BacktestParams) ([]BacktestTrade, BacktestMetrics) {
 	// This is a simplified simulation
 	// In production, you would fetch real historical data and execute strategy logic
-	
+
 	trades := []BacktestTrade{}
 	equityCurve := []float64{params.InitialCapital}
 	drawdownCurve := []float64{0}
-	
+
 	currentCapital := params.InitialCapital
 	position := 0
 	entryPrice := 0.0
@@ -143,7 +142,7 @@ func (b *Backtester) simulateStrategy(params BacktestParams) ([]BacktestTrade, B
 	// In production, this would be based on actual strategy signals
 	for i := 0; i < days; i++ {
 		timestamp := params.StartDate.Add(time.Duration(i) * 24 * time.Hour)
-		
+
 		// Simulate price movement (random walk)
 		price := 100.0 + float64(i)*0.5 + (float64(i%10) - 5)
 
@@ -159,10 +158,10 @@ func (b *Backtester) simulateStrategy(params BacktestParams) ([]BacktestTrade, B
 
 					trades = append(trades, BacktestTrade{
 						Timestamp: timestamp,
-						Action:    "BUY",
-						Price:     price,
-						Quantity:  quantity,
-						PnL:       0,
+						Action: "BUY",
+						Price: price,
+						Quantity: quantity,
+						PnL: 0,
 					})
 				}
 			} else {
@@ -172,10 +171,10 @@ func (b *Backtester) simulateStrategy(params BacktestParams) ([]BacktestTrade, B
 
 				trades = append(trades, BacktestTrade{
 					Timestamp: timestamp,
-					Action:    "SELL",
-					Price:     price,
-					Quantity:  position,
-					PnL:       pnl,
+					Action: "SELL",
+					Price: price,
+					Quantity: position,
+					PnL: pnl,
 				})
 
 				position = 0
@@ -203,8 +202,8 @@ func (b *Backtester) simulateStrategy(params BacktestParams) ([]BacktestTrade, B
 	}
 
 	metrics := BacktestMetrics{
-		Trades:        trades,
-		EquityCurve:   equityCurve,
+		Trades: trades,
+		EquityCurve: equityCurve,
 		DrawdownCurve: drawdownCurve,
 	}
 

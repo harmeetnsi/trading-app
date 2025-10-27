@@ -1,11 +1,10 @@
-
 package main
 
 import (
-//	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
@@ -23,6 +22,7 @@ func main() {
 	dbPath := getEnv("DB_PATH", "./data/trading.db")
 	uploadDir := getEnv("UPLOAD_DIR", "./data/uploads")
 	port := getEnv("PORT", "8080")
+	// FIX: Ensure these are declared correctly for use below
 	openalgoURL := getEnv("OPENALGO_URL", "https://openalgo.mywire.org")
 	openalgoAPIKey := getEnv("OPENALGO_API_KEY", "")
 	abacusAPIKey := getEnv("ABACUS_API_KEY", "")
@@ -55,12 +55,12 @@ func main() {
 				log.Printf("Failed to cleanup sessions: %v", err)
 			}
 			// Run every hour
-			// time.Sleep(1 * time.Hour)
+			time.Sleep(1 * time.Hour)
 		}
 	}()
 
-	// Initialize OpenAlgo client
-	openalgoClient := openalgo.NewClient(openalgoURL, openalgoAPIKey)
+	// FIX 1: Initialize OpenAlgo client with URL and API Key
+	openalgoClient := openalgo.NewOpenAlgoClient(openalgoURL, openalgoAPIKey)
 
 	// Initialize AI client
 	aiClient := ai.NewAIClient(abacusAPIKey)
@@ -75,13 +75,18 @@ func main() {
 	chatHandler := handlers.NewChatHandler(db)
 	fileHandler := handlers.NewFileHandler(db, uploadDir)
 	strategyHandler := handlers.NewStrategyHandler(db)
-	tradeHandler := handlers.NewTradeHandler(db)
+	// FIX 3: Pass openalgoClient to TradeHandler
+	tradeHandler := handlers.NewTradeHandler(db, openalgoClient) // <-- FIX IS HERE
 	portfolioHandler := handlers.NewPortfolioHandler(db, openalgoClient)
 	backtestHandler := handlers.NewBacktestHandler(db, openalgoClient)
-	wsHandler := handlers.NewWebSocketHandler(hub, db, aiClient)
+	// FIX 2: Pass OpenAlgo config to WebSocketHandler
+	wsHandler := handlers.NewWebSocketHandler(hub, db, aiClient, openalgoURL, openalgoAPIKey)
 
 	// Setup router
 	r := mux.NewRouter()
+
+	// FIX: Moved /signal under the /api/ prefix to ensure routing works correctly
+	r.HandleFunc("/api/signal", tradeHandler.HandleSignal).Methods("GET")
 
 	// Public routes
 	r.HandleFunc("/api/auth/register", authHandler.Register).Methods("POST")
@@ -145,7 +150,7 @@ func main() {
 	log.Printf("OpenAlgo URL: %s", openalgoURL)
 	log.Printf("Database: %s", dbPath)
 	log.Printf("Upload directory: %s", uploadDir)
-	
+
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatalf("Server failed to start: %v", err)
 	}
