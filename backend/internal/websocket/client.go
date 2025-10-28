@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"encoding/json"
+	"math"
 	"fmt"
 	"log"
 	"strconv"
@@ -24,17 +25,16 @@ const (
 )
 
 type Client struct {
-	hub        *Hub
-	conn       *websocket.Conn
-	send       chan []byte
-	userID     int
-	db         *database.DB
-	ai         *ai.AIClient
-	oaClient   *openalgo.OpenAlgoClient
-	autoOrders map[string]*models.AutoOrder
-	orderMux   sync.Mutex
-	// NEW: Map to hold cancellation channels for each running order
-    cancellation map[string]chan struct{}     // map[orderID] -> channel to signal stop
+	hub          *Hub
+	conn         *websocket.Conn
+	send         chan []byte
+	userID       int
+	db           *database.DB
+	ai           *ai.AIClient
+	oaClient     *openalgo.OpenAlgoClient
+	autoOrders   map[string]*models.AutoOrder
+	orderMux     sync.Mutex
+	cancellation map[string]chan struct{}
 }
 
 type Message struct {
@@ -46,49 +46,44 @@ type Message struct {
 
 func NewClient(hub *Hub, conn *websocket.Conn, userID int, db *database.DB, aiClient *ai.AIClient, baseURL string, apiKey string) *Client {
 	return &Client{
-		hub:        hub,
-		conn:       conn,
-		send:       make(chan []byte, 256),
-		userID:     userID,
-		db:         db,
-		ai:         aiClient,
-		oaClient:   openalgo.NewOpenAlgoClient(baseURL, apiKey),
-		autoOrders: make(map[string]*models.AutoOrder),
-		cancellation: make(map[string]chan struct{}), // <-- ADD THIS LINE
+		hub:          hub,
+		conn:         conn,
+		send:         make(chan []byte, 256),
+		userID:       userID,
+		db:           db,
+		ai:           aiClient,
+		oaClient:     openalgo.NewOpenAlgoClient(baseURL, apiKey),
+		autoOrders:   make(map[string]*models.AutoOrder),
+		cancellation: make(map[string]chan struct{}),
 	}
 }
 
-// StartAutoOrderMonitoring launches a background goroutine to continuously check a condition
-func (c *Client) StartAutoOrderMonitoring(symbol, exchange, interval, condition, action string, quantity int, expiresAt time.Time) (string, error) {
-	
-	// 1. Create unique ID and cancellation channel
-	orderID := fmt.Sprintf("%s_%s_%d", symbol, action, time.Now().Unix())
-	cancelChan := make(chan struct{}) // Channel to signal the goroutine to stop
+func (c *Client) StartAutoOrderMonitoring(symbol, exchange, product, interval, condition, action string, quantity int, expiresAt time.Time) (string, error) {
+	orderID := fmt.Sprintf("SO-%d", time.Now().Unix()%100000)
+	cancelChan := make(chan struct{})
 
-	// 2. Create the AutoOrder struct
 	order := &models.AutoOrder{
-		ID:        orderID,
-		UserID:    c.userID,
-		Symbol:    symbol,
-		Exchange:  exchange,
-		Quantity:  quantity,
-		Action:    action,
-		Interval:  interval,
-		Condition: condition,
-		Status:    "running",
-		CreatedAt: time.Now(),
-		ExpiresAt: expiresAt,
-	}
+	ID:        orderID,
+	UserID:    c.userID,
+	Symbol:    symbol,
+	Exchange:  exchange,
+	Product:   product,  // NEW
+	Quantity:  quantity,
+	Action:    action,
+	Interval:  interval,
+	Condition: condition,
+	Status:    "running",
+	CreatedAt: time.Now(),
+	ExpiresAt: expiresAt,
+}
 
-	// 3. Save to tracking maps (Thread safe access)
 	c.orderMux.Lock()
 	c.autoOrders[orderID] = order
 	c.cancellation[orderID] = cancelChan
 	c.orderMux.Unlock()
 
-	// 4. Start the monitoring job
 	go c.monitorAndPlaceOrder(order)
-	
+
 	return orderID, nil
 }
 
@@ -106,7 +101,17 @@ func (c *Client) sendError(errMsg string) {
 }
 
 // monitorAndPlaceOrder is the worker function that runs in a separate goroutine.
-func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) { // NOTE: Now accepts the full AutoOrder struct
+// monitorAndPlaceOrder is the worker function that runs in a separate goroutine.
+func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
+	// NEW: Add panic recovery
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("🚨 PANIC in monitorAndPlaceOrder for %s: %v", order.Symbol, r)
+			c.sendError(fmt.Sprintf("❌ Auto-Order %s crashed: %v. Please contact support.", order.ID, r))
+			c.removeAutoOrder(order.ID)
+		}
+	}()
+	
 	log.Printf("AUTO-ORDER: Monitoring started for %s on %s. Interval: %s. Condition: %s", 
 		order.Symbol, order.Exchange, order.Interval, order.Condition)
 
@@ -117,7 +122,7 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) { // NOTE: Now ac
 
 	if !ok {
 		log.Printf("AUTO-ORDER ERROR: Could not find cancellation channel for order %s. Stopping.", order.ID)
-		return // Should not happen if logic is followed
+		return
 	}
 
 	// Determine the check delay
@@ -131,7 +136,20 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) { // NOTE: Now ac
 	ticker := time.NewTicker(checkDelay)
 	defer ticker.Stop()
 	
-	// --- Cleanup function to run when the loop exits (CRUCIAL) ---
+	// FIX: Create expiry timer properly
+	expiryDuration := time.Until(order.ExpiresAt)
+	if expiryDuration <= 0 {
+		c.sendSystemMessage(fmt.Sprintf("⚠️ Auto-Order %s already expired. Stopping.", order.ID))
+		return
+	}
+	if expiryDuration > 30*24*time.Hour {
+		expiryDuration = 30 * 24 * time.Hour // Cap at 30 days
+	}
+	
+	expiryTimer := time.NewTimer(expiryDuration)
+	defer expiryTimer.Stop()
+	
+	// Cleanup function to run when the loop exits
 	defer func() {
 		c.removeAutoOrder(order.ID)
 		log.Printf("AUTO-ORDER: Monitoring for %s (ID: %s) stopped and cleaned up.", order.Symbol, order.ID)
@@ -140,78 +158,104 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) { // NOTE: Now ac
 	for {
 		select {
 		case <-cancelChan:
-			// 1. Received explicit signal to stop (from /cancel_order or expiry)
+			// Received explicit signal to stop
 			c.sendSystemMessage(fmt.Sprintf("❌ Auto-Order %s for %s was CANCELLED.", order.ID, order.Symbol))
-			return // Exit the goroutine
+			return
 
-		case <-time.After(time.Until(order.ExpiresAt)):
-			// 2. Monitoring period has naturally expired
+		case <-expiryTimer.C:
+			// Monitoring period has expired
 			c.sendSystemMessage(fmt.Sprintf("🕒 Auto-Order %s for %s has EXPIRED. Monitoring stopped.", order.ID, order.Symbol))
-			return // Exit the goroutine
+			return
 
 		case <-ticker.C:
-			// 3. Time for the next check has arrived
+			// Time for the next check
 			
-			// If expired, the time.After case should have caught it, but we double-check here
+			// Safety check for expiry
 			if time.Now().After(order.ExpiresAt) {
-				continue // Let the time.After case handle the exit for clean logging
+				c.sendSystemMessage(fmt.Sprintf("🕒 Auto-Order %s for %s has EXPIRED. Monitoring stopped.", order.ID, order.Symbol))
+				return
 			}
 
-			// --- Condition Evaluation and Order Placement (Unchanged Logic) ---
-			isMet, _, err := c.oaClient.EvaluatePineCondition(order.Condition, order.Symbol, order.Exchange)
+			// Evaluate condition
+			isMet, valuesMap, err := c.oaClient.EvaluatePineCondition(order.Interval, order.Condition, order.Symbol, order.Exchange)
+			
 			if err != nil {
-				c.sendError(fmt.Sprintf("❌ Auto-Order %s failed to evaluate: %v. Monitoring stopped.", order.ID, err))
-				return 
+				log.Printf("AUTO-ORDER: Evaluation error for %s: %v", order.ID, err)
+				// Don't stop monitoring on transient errors - just log and continue
+				continue
 			}
 
 			if isMet {
-				// Order Placement Logic
+				// Build indicator summary
+				indicatorSummary := ""
+				for name, value := range valuesMap {
+					if math.IsNaN(value) || math.IsInf(value, 0) {
+						indicatorSummary += fmt.Sprintf(" **%s**: N/A |", name)
+					} else {
+						indicatorSummary += fmt.Sprintf(" **%s**: %.2f |", name, value)
+					}
+				}
+
+				// Place order
 				orderReq := &openalgo.OpenAlgoSmartOrderRequest{
 					Strategy:     "auto_chat",
 					Symbol:       order.Symbol,
 					Exchange:     order.Exchange,
 					Action:       order.Action,
-					Pricetype:    "MARKET", 
-					Product:      "MIS", 
+					Pricetype:    "MARKET",
+					Product:      order.Product,
 					Quantity:     order.Quantity,
 					PositionSize: 0,
 					Price:        0.0,
 				}
 
+				log.Printf("AUTO-ORDER: Placing order for %s (ID: %s)", order.Symbol, order.ID)
 				orderResponse, err := c.oaClient.PlaceOpenAlgoSmartOrder(orderReq)
-				
-				// Report result and STOP monitoring (one-time execution)
+
 				if err != nil {
 					c.sendError(fmt.Sprintf("❌ Auto-Order %s FAILED to place order: %v. Monitoring stopped.", order.ID, err))
 				} else {
-					c.sendSystemMessage(fmt.Sprintf("✅ **AUTO ORDER EXECUTED** for %s on %s! Order ID: %s. Monitoring stopped.", 
-						order.Symbol, order.Exchange, orderResponse.Data.OrderID))
+					c.sendSystemMessage(fmt.Sprintf("✅ **AUTO ORDER EXECUTED** for %s on %s!\n\n### Trigger Values:\n%s\n**Order ID**: %s\n\nMonitoring stopped.",
+						order.Symbol, order.Exchange, indicatorSummary, orderResponse.Data.OrderID))
 				}
-				return // Stop monitoring after the order is placed/failed
+				return
 			}
 		}
 	}
 }
 
+
+
 // removeAutoOrder cleans up the tracking maps after an order is executed, cancelled, or expired.
 func (c *Client) removeAutoOrder(orderID string) {
 	c.orderMux.Lock()
-	defer c.orderMux.Unlock()
+	order, exists := c.autoOrders[orderID]
+	if !exists {
+		c.orderMux.Unlock()
+		log.Printf("AUTO-ORDER: Order %s already removed", orderID)
+		return
+	}
 	
-	if _, ok := c.autoOrders[orderID]; ok {
+	// Use sync.Once to ensure cleanup happens exactly once
+	order.CleanupOnce.Do(func() {
+		log.Printf("AUTO-ORDER: Cleaning up order %s", orderID)
+		
+		// Remove from map first
 		delete(c.autoOrders, orderID)
-	}
-	
-	if chanToClose, ok := c.cancellation[orderID]; ok {
-		// Close the channel if it hasn't been closed already
-		select {
-		case <-chanToClose:
-			// Channel is already closed
-		default:
-			close(chanToClose)
+		
+		// Close channel safely
+		if ch, ok := c.cancellation[orderID]; ok {
+			select {
+			case <-ch:
+				// Already closed
+			default:
+				close(ch)
+			}
+			delete(c.cancellation, orderID)
 		}
-		delete(c.cancellation, orderID)
-	}
+	})
+	
+	c.orderMux.Unlock()
 }
 
 func (c *Client) sendSystemMessage(content string) {
@@ -407,61 +451,81 @@ func (c *Client) handleTradingCommand(command string) {
 			}
 
 		case "/buy_smart", "/sell_smart":
-			if len(parts) >= 3 {
-				action := "BUY"
-				if cmd == "/sell_smart" {
-					action = "SELL"
-				}
+	if len(parts) >= 3 {
+		action := "BUY"
+		if cmd == "/sell_smart" {
+			action = "SELL"
+		}
 
-				symbol := strings.ToUpper(parts[1])
-				quantityStr := parts[2]
+		symbol := strings.ToUpper(parts[1])
+		quantityStr := parts[2]
 
-				exchange := "NSE"
-				priceType := "MARKET"
-				price := 0.0
+		exchange := "NSE"
+		priceType := "MARKET"
+		product := "MIS"  // Changed here
+		price := 0.0
 
-				if len(parts) >= 4 {
-					exchange = strings.ToUpper(parts[3])
-				}
+			if len(parts) >= 4 {
+	exchange = strings.ToUpper(parts[3])
+}
 
-				if len(parts) >= 5 {
-					pType := strings.ToUpper(parts[4])
-					if pType == "LIMIT" {
-						priceType = "LIMIT"
-					} else if pType == "MARKET" {
-						priceType = "MARKET"
-					}
-					if priceType == "LIMIT" && len(parts) >= 6 {
-						priceStr := parts[5]
-						p, err := strconv.ParseFloat(priceStr, 64)
-						if err != nil {
-							responseContent = fmt.Sprintf("Invalid limit price '%s'. Must be a number.", priceStr)
-							break
-						}
-						price = p
-					}
-				}
+if len(parts) >= 5 {
+	// Check if it's a product type (MIS/NRML/CNC)
+	param := strings.ToUpper(parts[4])
+	if param == "MIS" || param == "NRML" || param == "CNC" {
+		product = param
+		// Check for price type in next parameter
+		if len(parts) >= 6 {
+			pType := strings.ToUpper(parts[5])
+			if pType == "LIMIT" || pType == "MARKET" {
+				priceType = pType
+			}
+		}
+		// Handle limit price
+		if priceType == "LIMIT" && len(parts) >= 7 {
+			priceStr := parts[6]
+			p, err := strconv.ParseFloat(priceStr, 64)
+			if err != nil {
+				responseContent = fmt.Sprintf("Invalid limit price '%s'. Must be a number.", priceStr)
+				break
+			}
+			price = p
+		}
+	} else if param == "LIMIT" || param == "MARKET" {
+		// Old format: price type without product (defaults to MIS)
+		priceType = param
+		if priceType == "LIMIT" && len(parts) >= 6 {
+			priceStr := parts[5]
+			p, err := strconv.ParseFloat(priceStr, 64)
+			if err != nil {
+				responseContent = fmt.Sprintf("Invalid limit price '%s'. Must be a number.", priceStr)
+				break
+			}
+			price = p
+		}
+	}
+}
 
-				quantity, err := strconv.Atoi(quantityStr)
-				if err != nil || quantity <= 0 {
-					responseContent = "Invalid quantity. Must be a positive number."
-					break
-				}
+quantity, err := strconv.Atoi(quantityStr)
+if err != nil || quantity <= 0 {
+	responseContent = "Invalid quantity. Must be a positive number."
+	break
+}
 
 				log.Printf("Placing Smart Order: Action=%s, Symbol=%s, Qty=%d, Exchange=%s, Type=%s, Price=%.2f",
 					action, symbol, quantity, exchange, priceType, price)
 
 				orderReq := &openalgo.OpenAlgoSmartOrderRequest{
-					Strategy:     "manual_chat",
-					Symbol:       symbol,
-					Exchange:     exchange,
-					Action:       action,
-					Pricetype:    priceType,
-					Product:      "MIS",
-					Quantity:     quantity,
+					Strategy:    "manual_chat",
+					Symbol:      symbol,
+					Exchange:    exchange,
+					Action:      action,
+					Pricetype:   priceType,
+					Product:     product,  // USE THE VARIABLE
+					Quantity:    quantity,
 					PositionSize: 0,
-					Price:        price,
-				}
+					Price:       price,
+}
 
 				orderResponse, err := c.oaClient.PlaceOpenAlgoSmartOrder(orderReq)
 				if err != nil {
@@ -484,7 +548,7 @@ func (c *Client) handleTradingCommand(command string) {
 			if len(parts) >= 2 {
 				symbol := strings.ToUpper(parts[1])
 				responseContent = fmt.Sprintf(
-					"The simple `/rsi` command is deprecated. Please use the powerful **`/signal`** command for live evaluations, e.g.:\n\n- `/signal %s (RSI14 < 30) NSE`\n- `/signal %s (EMA50 > EMA200) NFO`",
+					"The simple `/rsi` command is deprecated. Please use the powerful **`/signal`** command for live evaluations, e.g.:\n\n- `/signal %s 5m \"RSI14 < 30\" NSE`\n- `/signal %s 1h \"EMA50 > EMA200\" NFO`",
 					symbol, symbol,
 				)
 			} else {
@@ -492,53 +556,58 @@ func (c *Client) handleTradingCommand(command string) {
 			}
 
 		case "/signal":
-			if len(parts) < 3 {
-				responseContent = "Usage: `/signal <SYMBOL> <CONDITION> [EXCHANGE]` (e.g., `/signal RELIANCE (RSI14 < 30) NFO`)"
+			if len(parts) < 4 {
+				responseContent = "Usage: `/signal <SYMBOL> <INTERVAL> <CONDITION> [EXCHANGE]`. Example: `/signal RELIANCE 1h \"RSI14 < 30\" NFO`"
+				break
+			}
+
+			symbol := strings.ToUpper(parts[1])
+			interval := strings.ToLower(parts[2])
+			exchange := "NSE"
+
+			if interval != "5m" && interval != "15m" && interval != "1h" {
+				responseContent = fmt.Sprintf("Unsupported interval: %s. Please use 5m, 15m, or 1h.", interval)
+				break
+			}
+
+			conditionParts := parts[3:]
+			lastPart := strings.ToUpper(conditionParts[len(conditionParts)-1])
+
+			if len(lastPart) >= 2 && len(lastPart) <= 4 && strings.IndexFunc(lastPart, func(r rune) bool {
+				return r < 'A' || r > 'Z'
+			}) == -1 {
+				exchange = lastPart
+				conditionParts = conditionParts[:len(conditionParts)-1]
+			}
+
+			condition := strings.Join(conditionParts, " ")
+			condition = strings.TrimPrefix(condition, "\"")
+			condition = strings.TrimSuffix(condition, "\"")
+
+			log.Printf("Received signal command: Symbol=%s, Interval=%s, Condition=\"%s\", Exchange=%s", symbol, interval, condition, exchange)
+
+			isConditionMet, valuesMap, err := c.oaClient.EvaluatePineCondition(interval, condition, symbol, exchange)
+			if err != nil {
+				log.Printf("Error evaluating condition for %s on %s: %v", symbol, exchange, err)
+				responseContent = fmt.Sprintf("⚠️ Error evaluating signal for %s on %s: %v", symbol, exchange, err)
 			} else {
-				symbol := strings.ToUpper(parts[1])
-				exchange := "NSE"
-
-				conditionParts := parts[2:]
-				lastPart := strings.ToUpper(conditionParts[len(conditionParts)-1])
-
-				if len(lastPart) >= 2 && len(lastPart) <= 4 && strings.IndexFunc(lastPart, func(r rune) bool {
-					return r < 'A' || r > 'Z'
-				}) == -1 {
-					exchange = lastPart
-					conditionParts = conditionParts[:len(conditionParts)-1]
+				indicatorSummary := ""
+				for name, value := range valuesMap {
+					indicatorSummary += fmt.Sprintf(" **%s**: %.2f |", name, value)
 				}
 
-				condition := strings.Join(conditionParts, " ")
-				// FIX: Strip leading/trailing quotes from the condition string
-				condition = strings.TrimPrefix(condition, "\"")
-				condition = strings.TrimSuffix(condition, "\"")
-
-				log.Printf("Received signal command: Symbol=%s, Condition=\"%s\", Exchange=%s", symbol, condition, exchange)
-
-				isConditionMet, valuesMap, err := c.oaClient.EvaluatePineCondition(condition, symbol, exchange)
-				if err != nil {
-					log.Printf("Error evaluating condition for %s on %s: %v", symbol, exchange, err)
-					responseContent = fmt.Sprintf("⚠️ Error evaluating signal for %s on %s: %v", symbol, exchange, err)
+				if isConditionMet {
+					responseContent = fmt.Sprintf("✅ **Signal Met** for %s on %s (%s).\n\n### Current Values:\n%s\nCondition: `%s` is TRUE.", symbol, exchange, interval, indicatorSummary, condition)
 				} else {
-					// Build the display of indicator values (e.g., RSI14=45.20)
-					indicatorSummary := ""
-					for name, value := range valuesMap {
-						indicatorSummary += fmt.Sprintf(" **%s**: %.2f |", name, value)
-					}
-					
-					if isConditionMet {
-						responseContent = fmt.Sprintf("✅ **Signal Met** for %s on %s.\n\n### Current Values:\n%s\nCondition: `%s` is TRUE.", symbol, exchange, indicatorSummary, condition)
-					} else {
-						responseContent = fmt.Sprintf("❌ **Signal NOT Met** for %s on %s.\n\n### Current Values:\n%s\nCondition: `%s` is FALSE.", symbol, exchange, indicatorSummary, condition)
-					}
+					responseContent = fmt.Sprintf("❌ **Signal NOT Met** for %s on %s (%s).\n\n### Current Values:\n%s\nCondition: `%s` is FALSE.", symbol, exchange, interval, indicatorSummary, condition)
 				}
 			}
 
 		case "/buy_smart_auto", "/sell_smart_auto":
-			if len(parts) < 7 {
-				responseContent = "Usage: `/buy_smart_auto <SYMBOL> <QTY> <EXCHANGE> <INTERVAL> <VALIDITY> <CONDITION...>`. Example: `/buy_smart_auto TCS 10 NSE 5m 2h \"RSI14 < 30\"`"
+			if len(parts) < 8 {  // CHANGED FROM 7 TO 8
+				responseContent = "Usage: `/buy_smart_auto <SYMBOL> <QTY> <EXCHANGE> <PRODUCT> <INTERVAL> <VALIDITY> <CONDITION...>`. Example: `/buy_smart_auto TCS 10 NSE NRML 5m 2h \"RSI14 < 30\"`"
 				break
-			}
+}
 
 			action := "BUY"
 			if cmd == "/sell_smart_auto" {
@@ -548,9 +617,16 @@ func (c *Client) handleTradingCommand(command string) {
 			symbol := strings.ToUpper(parts[1])
 			quantityStr := parts[2]
 			exchange := strings.ToUpper(parts[3])
-			interval := strings.ToLower(parts[4])
-			validityStr := strings.ToLower(parts[5])
-			condition := strings.Join(parts[6:], " ")
+			product := strings.ToUpper(parts[4])  // NEW
+			interval := strings.ToLower(parts[5])  // SHIFTED
+			validityStr := strings.ToLower(parts[6])  // SHIFTED
+			condition := strings.Join(parts[7:], " ")  // SHIFTED
+
+			// Validate product
+			if product != "MIS" && product != "NRML" && product != "CNC" {
+				responseContent = fmt.Sprintf("Invalid product type: %s. Use MIS, NRML, or CNC.", product)
+				break
+}
 
 			quantity, err := strconv.Atoi(quantityStr)
 			if err != nil || quantity <= 0 {
@@ -569,7 +645,13 @@ func (c *Client) handleTradingCommand(command string) {
 				break
 			}
 
-			orderID, err := c.StartAutoOrderMonitoring(symbol, exchange, interval, condition, action, quantity, expiresAt)
+			_, initialValues, _ := c.oaClient.EvaluatePineCondition(interval, condition, symbol, exchange)
+			indicatorSummary := ""
+			for name, value := range initialValues {
+				indicatorSummary += fmt.Sprintf(" **%s**: %.2f |", name, value)
+			}
+
+			orderID, err := c.StartAutoOrderMonitoring(symbol, exchange, product, interval, condition, action, quantity, expiresAt)
 
 			if err != nil {
 				log.Printf("Failed to start auto order for %s: %v", symbol, err)
@@ -579,13 +661,7 @@ func (c *Client) handleTradingCommand(command string) {
 				if validityStr != "forever" {
 					expiryDisplay = fmt.Sprintf("Expires at %s", expiresAt.Format("15:04:05 MST"))
 				}
-				// Run a quick evaluation to get the initial values for the confirmation message
-				_, initialValues, _ := c.oaClient.EvaluatePineCondition(condition, symbol, exchange)
-				indicatorSummary := ""
-				for name, value := range initialValues {
-					indicatorSummary += fmt.Sprintf(" **%s**: %.2f |", name, value)
-				}
-				
+
 				responseContent = fmt.Sprintf("✅ **Auto Order Monitoring Started!**\n\n### Initial Values:\n%s\n- **ID**: %s\n- **Action**: %s\n- **Symbol**: %s on %s\n- **Interval**: %s\n- **Condition**: `%s`\n- **Validity**: %s",
 					indicatorSummary, orderID, action, symbol, exchange, interval, condition, expiryDisplay)
 			}
@@ -599,7 +675,7 @@ func (c *Client) handleTradingCommand(command string) {
 			} else {
 				var orderList strings.Builder
 				orderList.WriteString(fmt.Sprintf("📋 **Active Auto-Orders** (%d)\n\n", orderCount))
-				
+
 				for _, order := range c.autoOrders {
 					expiryInfo := "Never"
 					if order.ExpiresAt.Year() != 9999 {
@@ -611,14 +687,14 @@ func (c *Client) handleTradingCommand(command string) {
 				responseContent = orderList.String()
 				c.orderMux.Unlock()
 			}
-			case "/cancel_order":
-			// Usage: /cancel_order <ORDER_ID>
+
+		case "/cancel_order":
 			if len(parts) != 2 {
 				responseContent = "Usage: `/cancel_order <ORDER_ID>`"
 				break
 			}
 			orderID := parts[1]
-			
+
 			c.orderMux.Lock()
 			order, found := c.autoOrders[orderID]
 			cancelChan, chanFound := c.cancellation[orderID]
@@ -628,21 +704,18 @@ func (c *Client) handleTradingCommand(command string) {
 				responseContent = fmt.Sprintf("❌ Auto-Order ID `%s` not found or does not belong to you.", orderID)
 			} else {
 				if chanFound {
-					// Send the signal to the goroutine
 					select {
 					case cancelChan <- struct{}{}:
 					default:
 					}
 				}
-				// Remove immediately from maps to prevent re-cancellation
-				c.removeAutoOrder(orderID) 
+				c.removeAutoOrder(orderID)
 				responseContent = fmt.Sprintf("✅ Auto-Order ID `%s` for %s has been successfully cancelled.", orderID, order.Symbol)
 			}
-			
+
 		case "/cancel_all_orders":
-			// Command to cancel all running auto-orders for the current user
 			count := 0
-			
+
 			c.orderMux.Lock()
 			ordersToCancel := []*models.AutoOrder{}
 			for _, order := range c.autoOrders {
@@ -655,20 +728,20 @@ func (c *Client) handleTradingCommand(command string) {
 			for _, order := range ordersToCancel {
 				c.orderMux.Lock()
 				if chanToClose, ok := c.cancellation[order.ID]; ok {
-					// Send the signal to the goroutine
 					select {
 					case chanToClose <- struct{}{}:
 					default:
 					}
-					// Remove from maps (cleanup is deferred in monitorAndPlaceOrder)
-					c.removeAutoOrder(order.ID) 
+					c.removeAutoOrder(order.ID)
 					count++
 				}
+				c.orderMux.Unlock()
 			}
 
 			responseContent = fmt.Sprintf("✅ Successfully cancelled %d active conditional orders.", count)
+
 		default:
-			responseContent = "Sorry, I didn't understand that command. Try: \n- `/price <SYMBOL> [EXCHANGE]`\n- `/buy_smart <SYMBOL> <QTY> [EXCHANGE] [MARKET|LIMIT] [PRICE]`\n- `/signal <SYMBOL> <CONDITION> [EXCHANGE]`\n- `/buy_smart_auto <SYMBOL> <QTY> <EXCHANGE> <INTERVAL> <VALIDITY> <CONDITION>`\n- `/status_orders` or `/cancel_order <ID>`"
+			responseContent = "Sorry, I didn't understand that command. Try: \n- `/price <SYMBOL> [EXCHANGE]`\n- `/buy_smart <SYMBOL> <QTY> [EXCHANGE] [MARKET|LIMIT] [PRICE]`\n- `/signal <SYMBOL> <INTERVAL> <CONDITION> [EXCHANGE]`\n- `/buy_smart_auto <SYMBOL> <QTY> <EXCHANGE> <INTERVAL> <VALIDITY> <CONDITION>`\n- `/status_orders` or `/cancel_order <ID>`"
 		}
 	}
 

@@ -41,32 +41,32 @@ type OpenAlgoQuoteRequest struct {
 }
 
 type OpenAlgoQuoteData struct {
-	LTP           float64 `json:"ltp"`
-	Change        float64 `json:"chng"`
+	LTP    float64 `json:"ltp"`
+	Change    float64 `json:"chng"`
 	ChangePercent float64 `json:"chng_perc"`
-	High          float64 `json:"high"`
-	Low           float64 `json:"low"`
-	Open          float64 `json:"open"`
+	High    float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Open    float64 `json:"open"`
 	PreviousClose float64 `json:"prev_close"`
 }
 
 type OpenAlgoQuoteResponse struct {
-	Status string          `json:"status"`
+	Status string    `json:"status"`
 	Data   OpenAlgoQuoteData `json:"data"`
-	Error  string          `json:"error,omitempty"`
+	Error  string    `json:"error,omitempty"`
 }
 
 type OpenAlgoSmartOrderRequest struct {
-	Apikey       string  `json:"apikey"`
-	Strategy     string  `json:"strategy"`
-	Symbol       string  `json:"symbol"`
-	Exchange     string  `json:"exchange"`
-	Action       string  `json:"action"`
+	Apikey    string  `json:"apikey"`
+	Strategy    string  `json:"strategy"`
+	Symbol    string  `json:"symbol"`
+	Exchange    string  `json:"exchange"`
+	Action    string  `json:"action"`
 	Pricetype    string  `json:"pricetype"`
-	Product      string  `json:"product"`
-	Quantity     int     `json:"quantity"`
-	PositionSize int     `json:"position_size"`
-	Price        float64 `json:"price,omitempty"`
+	Product    string  `json:"product"`
+	Quantity    int    `json:"quantity"`
+	PositionSize int    `json:"position_size"`
+	Price    float64 `json:"price,omitempty"`
 }
 
 type OpenAlgoSmartOrderData struct {
@@ -74,10 +74,10 @@ type OpenAlgoSmartOrderData struct {
 }
 
 type OpenAlgoSmartOrderResponse struct {
-	Status  string                 `json:"status"`
-	Message string                 `json:"message,omitempty"`
+	Status  string    `json:"status"`
+	Message string    `json:"message,omitempty"`
 	Data    OpenAlgoSmartOrderData `json:"data"`
-	Error   string                 `json:"error,omitempty"`
+	Error   string    `json:"error,omitempty"`
 }
 
 type OpenAlgoHistoryRequest struct {
@@ -91,18 +91,18 @@ type OpenAlgoHistoryRequest struct {
 
 type OpenAlgoCandle struct {
 	Timestamp int64   `json:"timestamp"` // Unix timestamp
-	Open      float64 `json:"open"`
-	High      float64 `json:"high"`
-	Low       float64 `json:"low"`
-	Close     float64 `json:"close"`
+	Open    float64 `json:"open"`
+	High    float64 `json:"high"`
+	Low    float64 `json:"low"`
+	Close    float64 `json:"close"`
 	Volume    int64   `json:"volume"`
-	OI        int64   `json:"oi"`
+	OI    int64   `json:"oi"`
 }
 
 type OpenAlgoHistoryResponse struct {
-	Status string           `json:"status"`
+	Status string    `json:"status"`
 	Data   []OpenAlgoCandle `json:"data"` // Array of candles
-	Error  string           `json:"error,omitempty"`
+	Error  string    `json:"error,omitempty"`
 }
 
 // --- METHOD: FetchOpenAlgoQuote fetches live quote data from OpenAlgo ---
@@ -322,6 +322,11 @@ func (oa *OpenAlgoClient) CalculateIndicatorValue(indicatorName string, period i
 		emaResults := talib.Ema(closePrices, period)
 		return emaResults[len(emaResults)-1], nil
 
+	case "SMA":
+		// Calculate Simple Moving Average
+		smaResults := talib.Sma(closePrices, period)
+		return smaResults[len(smaResults)-1], nil
+
 	case "MACD":
 		// Calculate MACD (using standard 12, 26, 9 periods for simplicity)
 		_, _, macdResults := talib.Macd(closePrices, 12, 26, 9) 
@@ -345,18 +350,15 @@ func (oa *OpenAlgoClient) CalculateIndicatorValue(indicatorName string, period i
 // --- METHOD: EvaluatePineCondition evaluates Pine Script-like conditions ---
 // NOTE: Now accepts 'exchange' argument
 // --- METHOD: EvaluatePineCondition evaluates Pine Script-like conditions ---
-func (oa *OpenAlgoClient) EvaluatePineCondition(condition string, symbol string, exchange string) (bool, map[string]float64, error) {
-	log.Printf("Attempting to evaluate condition for %s on %s: %s", symbol, exchange, condition)
+func (oa *OpenAlgoClient) EvaluatePineCondition(interval string, condition string, symbol string, exchange string) (bool, map[string]float64, error) {
+	log.Printf("Attempting to evaluate condition for %s on %s (%s): %s", symbol, exchange, interval, condition)
 
-	// --- Step A: Fetch Data (Logic for 5m interval) ---
-	interval := "5m"
+	// --- Step A: Fetch Data ---
 	endDate := time.Now().Format("2006-01-02")
-	// Use 5 days for data fetching to ensure we have enough candles for high periods
-	startDate := time.Now().AddDate(0, 0, -5).Format("2006-01-02") 
+	startDate := time.Now().AddDate(0, 0, -5).Format("2006-01-02")
 
 	log.Printf("Fetching %s history for %s (%s to %s) on exchange %s", interval, symbol, startDate, endDate, exchange)
 
-	// Note: exchange is passed dynamically here
 	candles, err := oa.FetchOpenAlgoHistory(symbol, exchange, interval, startDate, endDate)
 	if err != nil {
 		log.Printf("Error fetching history for %s: %v", symbol, err)
@@ -380,87 +382,121 @@ func (oa *OpenAlgoClient) EvaluatePineCondition(condition string, symbol string,
 	// --- Step C: Extract Indicators from the Condition ---
 	reWithPeriod := regexp.MustCompile(`([A-Za-z]+)(\d+)`)
 	matchesWithPeriod := reWithPeriod.FindAllStringSubmatch(condition, -1)
-	
-	parameters := make(map[string]interface{}) // Required by govaluate
 
-	// 1. Handle Indicators WITH Periods (RSI14, EMA20)
+	// Parameters map - DECLARE ONLY ONCE
+	parameters := make(map[string]interface{})
+
+	// Set current closing price
+	if len(closePrices) > 0 {
+		parameters["CLOSE"] = closePrices[len(closePrices)-1]
+		parameters["close"] = closePrices[len(closePrices)-1]
+	}
+
+	// Declare loop variables once
+	var indicatorName, periodStr, varName string
+
+	// Handle function-style indicators: sma(close, 20), ema(close, 50), rsi(close, 14)
+	reFunctionStyle := regexp.MustCompile(`(?i)(sma|ema|rsi)\s*\(\s*close\s*,\s*(\d+)\s*\)`)
+	functionMatches := reFunctionStyle.FindAllStringSubmatch(condition, -1)
+
+	for _, match := range functionMatches {
+		funcName := strings.ToUpper(match[1])
+		periodStr := match[2]
+
+		period, periodErr := strconv.Atoi(periodStr)
+		if periodErr != nil {
+			log.Printf("Error converting period '%s' to int: %v", periodStr, periodErr)
+			continue
+		}
+
+		indicatorValue, calcErr := oa.CalculateIndicatorValue(funcName, period, closePrices)
+		if calcErr != nil {
+			log.Printf("Error calculating indicator %s(%d): %v", funcName, period, calcErr)
+			return false, nil, calcErr
+		}
+
+		// Replace the function call with the calculated value
+		oldFunc := match[0]
+		condition = strings.ReplaceAll(condition, oldFunc, fmt.Sprintf("%.6f", indicatorValue))
+
+		// Store in parameters for display
+		varName := fmt.Sprintf("%s%d", funcName, period)
+		parameters[varName] = float64(indicatorValue)
+		log.Printf("Calculated %s: %.2f", varName, indicatorValue)
+	}
+
+	// Handle Indicators WITH Periods (RSI14, EMA20, SMA50, etc.)
 	for _, match := range matchesWithPeriod {
-		indicatorName := match[1] // e.g., "RSI"
-		periodStr := match[2]    // e.g., "14"
-		varName := match[0]      // e.g., "RSI14"
+		indicatorName = match[1]
+		periodStr = match[2]
+		varName = match[0]
 
-		period, err := strconv.Atoi(periodStr)
-		if err != nil {
-			log.Printf("Error converting period '%s' to int: %v", periodStr, err)
+		period, periodErr := strconv.Atoi(periodStr)
+		if periodErr != nil {
+			log.Printf("Error converting period '%s' to int: %v", periodStr, periodErr)
 			return false, nil, fmt.Errorf("invalid period specified for indicator %s", indicatorName)
 		}
 
-		value, err := oa.CalculateIndicatorValue(indicatorName, period, closePrices)
-		if err != nil {
-			log.Printf("Error calculating indicator %s: %v", varName, err)
-			return false, nil, err
+		indicatorValue, calcErr := oa.CalculateIndicatorValue(indicatorName, period, closePrices)
+		if calcErr != nil {
+			log.Printf("Error calculating indicator %s: %v", varName, calcErr)
+			return false, nil, calcErr
 		}
 
-		parameters[varName] = float64(value)
-		log.Printf("Calculated %s: %.2f", varName, value)
+		parameters[varName] = float64(indicatorValue)
+		log.Printf("Calculated %s: %.2f", varName, indicatorValue)
 	}
 
-	// 2. Handle Standalone Indicator MACD
+	// Handle Standalone Indicator MACD
 	if strings.Contains(strings.ToUpper(condition), "MACD") {
-		value, err := oa.CalculateIndicatorValue("MACD", 12, closePrices) // Period (12) is arbitrary for MACD
-		if err != nil {
-			log.Printf("Error calculating standalone MACD: %v", err)
-			return false, nil, err
+		macdValue, macdErr := oa.CalculateIndicatorValue("MACD", 12, closePrices)
+		if macdErr != nil {
+			log.Printf("Error calculating standalone MACD: %v", macdErr)
+			return false, nil, macdErr
 		}
-		
-		parameters["MACD"] = float64(value)
-		log.Printf("Calculated MACD: %.2f", value)
+
+		parameters["MACD"] = float64(macdValue)
+		log.Printf("Calculated MACD: %.2f", macdValue)
 	}
-	
-	// Safety check for other custom errors (like 'RSI' without period)
+
+	// Safety checks
 	reNoPeriod := regexp.MustCompile(`(RSI|EMA|SMA)\s`)
 	if reNoPeriod.MatchString(condition) {
 		log.Printf("Parsing error: Condition '%s' contains indicator without period.", condition)
 		return false, nil, fmt.Errorf("invalid indicator syntax. Did you forget the period? (e.g., use RSI14 instead of RSI)")
 	}
-	
-	// Check if any indicators were found. 
-	if len(parameters) == 0 && !strings.Contains(strings.ToUpper(condition), "MACD") {
-		log.Printf("Warning: No custom indicators found in condition: %s. Assuming literal evaluation.", condition)
+
+	if len(parameters) == 1 && !strings.Contains(strings.ToUpper(condition), "MACD") {
+		log.Printf("Warning: No recognized indicators found in condition: %s. Assuming literal evaluation.", condition)
 	}
-	
-	// --- Step D: Implement Parsing and Evaluation ---
-	
-	// 1. Parse the condition string
+
+	// --- Step D: Parse and Evaluate ---
 	expression, err := govaluate.NewEvaluableExpression(condition)
 	if err != nil {
 		log.Printf("Error parsing condition '%s': %v", condition, err)
 		return false, nil, fmt.Errorf("invalid Pine Script condition syntax: %w", err)
 	}
 
-	// 2. Evaluate the expression
 	result, err := expression.Evaluate(parameters)
 	if err != nil {
 		log.Printf("Error evaluating condition: %v", err)
 		return false, nil, fmt.Errorf("error during condition evaluation. Check your indicator names and syntax. Details: %v", err)
 	}
 
-	// 3. Cast the result to a boolean
 	isConditionMet, ok := result.(bool)
 	if !ok {
 		log.Printf("Evaluation result not a boolean: %v (Type: %T)", result, result)
 		return false, nil, fmt.Errorf("condition must evaluate to TRUE or FALSE (got type %T). Did you forget a comparison operator (>, <, ==, etc.)?", result)
 	}
-	
-	// --- CONVERT map[string]interface{} TO map[string]float64 for return ---
+
+	// Convert map[string]interface{} to map[string]float64 for return
 	indicatorValues := make(map[string]float64)
 	for name, value := range parameters {
-	    if floatVal, ok := value.(float64); ok {
-	        indicatorValues[name] = floatVal
-	    }
+		if floatVal, ok := value.(float64); ok {
+			indicatorValues[name] = floatVal
+		}
 	}
-	// --- END CONVERSION ---
 
 	log.Printf("Evaluation complete. Condition met: %t", isConditionMet)
-	return isConditionMet, indicatorValues, nil 
+	return isConditionMet, indicatorValues, nil
 }

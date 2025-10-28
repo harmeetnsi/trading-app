@@ -1,7 +1,7 @@
-
 package models
 
 import (
+	"sync"
 	"time"
 )
 
@@ -36,14 +36,14 @@ type ChatMessage struct {
 
 // File represents an uploaded file
 type File struct {
-	ID           int       `json:"id"`
-	UserID       int       `json:"user_id"`
-	FileName     string    `json:"file_name"`
-	FileType     string    `json:"file_type"` // "pine_script", "csv", "image", "pdf"
-	FilePath     string    `json:"file_path"`
-	FileSize     int64     `json:"file_size"`
-	ProcessedData string   `json:"processed_data,omitempty"` // JSON string of processed data
-	CreatedAt    time.Time `json:"created_at"`
+	ID            int       `json:"id"`
+	UserID        int       `json:"user_id"`
+	FileName      string    `json:"file_name"`
+	FileType      string    `json:"file_type"` // "pine_script", "csv", "image", "pdf"
+	FilePath      string    `json:"file_path"`
+	FileSize      int64     `json:"file_size"`
+	ProcessedData string    `json:"processed_data,omitempty"` // JSON string of processed data
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // Strategy represents a trading strategy
@@ -79,17 +79,17 @@ type BacktestResult struct {
 
 // Trade represents a trade execution
 type Trade struct {
-	ID         int       `json:"id"`
-	UserID     int       `json:"user_id"`
-	StrategyID *int      `json:"strategy_id,omitempty"`
-	Symbol     string    `json:"symbol"`
-	Action     string    `json:"action"` // "BUY", "SELL"
-	Quantity   int       `json:"quantity"`
-	Price      float64   `json:"price"`
-	OrderType  string    `json:"order_type"` // "MARKET", "LIMIT"
-	Status     string    `json:"status"`     // "pending", "executed", "failed"
-	OrderID    string    `json:"order_id,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         int        `json:"id"`
+	UserID     int        `json:"user_id"`
+	StrategyID *int       `json:"strategy_id,omitempty"`
+	Symbol     string     `json:"symbol"`
+	Action     string     `json:"action"` // "BUY", "SELL"
+	Quantity   int        `json:"quantity"`
+	Price      float64    `json:"price"`
+	OrderType  string     `json:"order_type"` // "MARKET", "LIMIT"
+	Status     string     `json:"status"`     // "pending", "executed", "failed"
+	OrderID    string     `json:"order_id,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
 	ExecutedAt *time.Time `json:"executed_at,omitempty"`
 }
 
@@ -106,12 +106,12 @@ type Position struct {
 
 // Portfolio represents overall portfolio metrics
 type Portfolio struct {
-	TotalValue      float64  `json:"total_value"`
-	Cash            float64  `json:"cash"`
-	PositionsValue  float64  `json:"positions_value"`
-	TodayPnL        float64  `json:"today_pnl"`
-	TotalPnL        float64  `json:"total_pnl"`
-	TotalPnLPercent float64  `json:"total_pnl_percent"`
+	TotalValue      float64    `json:"total_value"`
+	Cash            float64    `json:"cash"`
+	PositionsValue  float64    `json:"positions_value"`
+	TodayPnL        float64    `json:"today_pnl"`
+	TotalPnL        float64    `json:"total_pnl"`
+	TotalPnLPercent float64    `json:"total_pnl_percent"`
 	Positions       []Position `json:"positions"`
 }
 
@@ -124,17 +124,36 @@ type OpenPosition struct {
 	EntryPrice float64   `json:"entry_price"`
 	CreatedAt  time.Time `json:"created_at"`
 }
+
+// OrderState represents the current state of an auto order
+type OrderState int
+
+const (
+	StateMonitoring OrderState = iota
+	StateEvaluating
+	StateExecuting
+	StateCompleted
+	StateFailed
+	StateExpired
+)
+
 // AutoOrder represents a running background conditional order
 type AutoOrder struct {
 	ID        string    `json:"id"`        // Unique ID for tracking/cancellation
 	UserID    int       `json:"user_id"`
 	Symbol    string    `json:"symbol"`
 	Exchange  string    `json:"exchange"`
+	Product   string    `json:"product"`   // MIS, NRML, CNC
 	Quantity  int       `json:"quantity"`
 	Action    string    `json:"action"`
 	Interval  string    `json:"interval"`
 	Condition string    `json:"condition"`
 	Status    string    `json:"status"`    // e.g., "running", "executed", "cancelled"
 	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"` // New: Defines when monitoring stops
+	ExpiresAt time.Time `json:"expires_at"` // Defines when monitoring stops
+	
+	// State management fields
+	State       OrderState
+	StateMux    sync.RWMutex
+	CleanupOnce sync.Once
 }

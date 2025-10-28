@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"fmt" 
-	"log" // Added log for the fixed functions below
+	//"fmt" 
+	"log"
 	"net/http"
-	"strings" // Added strings for safety
+	"strings"
 
 	"trading-app/internal/database"
 	"trading-app/internal/models"
@@ -39,7 +39,7 @@ func (h *PortfolioHandler) GetHoldings(w http.ResponseWriter, r *http.Request) {
 	utils.ErrorResponse(w, http.StatusNotImplemented, "GetHoldings is not yet implemented after refactoring.")
 }
 
-// PlaceOrder places a new order (Kept Unchanged)
+// PlaceOrder places a new order
 func (h *PortfolioHandler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id").(int)
 
@@ -55,7 +55,7 @@ func (h *PortfolioHandler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Place order via OpenAlgo - We must call the public method PlaceOpenAlgoSmartOrder
+	// Place order via OpenAlgo
 	response, err := h.openalgo.PlaceOpenAlgoSmartOrder(&orderReq)
 	if err != nil {
 		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to place order: "+err.Error())
@@ -69,14 +69,13 @@ func (h *PortfolioHandler) PlaceOrder(w http.ResponseWriter, r *http.Request) {
 		Action:    orderReq.Action,
 		Quantity:  orderReq.Quantity,
 		Price:     orderReq.Price,
-		OrderType: orderReq.Pricetype, // NOTE: Assuming OrderType maps to Pricetype
+		OrderType: orderReq.Pricetype,
 		Status:    "pending",
-		OrderID:   response.Data.OrderID, // FIX: Use the correct struct path
+		OrderID:   response.Data.OrderID,
 	}
 
 	savedTrade, err := h.db.CreateTrade(trade)
 	if err != nil {
-		// Log error but don't fail the order placement
 		utils.SuccessResponse(w, "Order placed", response)
 		return
 	}
@@ -97,7 +96,6 @@ func (h *PortfolioHandler) GetQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- FIX: Pass the exchange argument (this was missing) ---
 	quote, err := h.openalgo.FetchOpenAlgoQuote(strings.ToUpper(symbol), strings.ToUpper(exchange)) 
 	if err != nil {
 		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve quote: "+err.Error())
@@ -107,102 +105,147 @@ func (h *PortfolioHandler) GetQuote(w http.ResponseWriter, r *http.Request) {
 	utils.SuccessResponse(w, "Quote retrieved", quote)
 }
 
-// --- FIX: Added the missing function that caused compile error (using default exchange) ---
 // HandlePortfolioValue retrieves the current valuation of the user's portfolio
 func (h *PortfolioHandler) HandlePortfolioValue(w http.ResponseWriter, r *http.Request) {
-    userID := r.Context().Value("user_id").(int)
-    positions, err := h.db.GetOpenPositionsByUserID(userID)
-    if err != nil {
-        utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve portfolio positions")
-        return
-    }
+	userID := r.Context().Value("user_id").(int)
+	
+	// Get exchange from query parameter, default to NSE
+	exchange := r.URL.Query().Get("exchange")
+	if exchange == "" {
+		exchange = "NSE"
+	}
+	exchange = strings.ToUpper(exchange)
 
-    var totalPortfolioValue float64
-    for _, pos := range positions {
-        // --- FIX: Pass default exchange "NSE" to FetchOpenAlgoQuote ---
-        quote, err := h.openalgo.FetchOpenAlgoQuote(pos.Symbol, "NSE")
-        if err != nil {
-            log.Printf("Warning: Failed to fetch quote for %s: %v", pos.Symbol, err)
-            continue 
-        }
-        totalPortfolioValue += quote.LTP * float64(pos.Quantity)
-    }
+	positions, err := h.db.GetOpenPositionsByUserID(userID)
+	if err != nil {
+		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve portfolio positions")
+		return
+	}
 
-    result := map[string]interface{}{
-        "total_value": totalPortfolioValue,
-        "position_count": len(positions),
-    }
+	var totalPortfolioValue float64
+	for _, pos := range positions {
+		quote, err := h.openalgo.FetchOpenAlgoQuote(pos.Symbol, exchange)
+		if err != nil {
+			log.Printf("Warning: Failed to fetch quote for %s on %s: %v", pos.Symbol, exchange, err)
+			continue 
+		}
+		totalPortfolioValue += quote.LTP * float64(pos.Quantity)
+	}
 
-    utils.SuccessResponse(w, "Portfolio valuation complete", result)
+	result := map[string]interface{}{
+		"total_value":    totalPortfolioValue,
+		"position_count": len(positions),
+		"exchange":       exchange,
+	}
+
+	utils.SuccessResponse(w, "Portfolio valuation complete", result)
 }
 
-// --- FIX: Added the missing function that caused compile error (using default exchange) ---
 // HandlePortfolioSignal checks if a condition is met for every symbol in the portfolio
 func (h *PortfolioHandler) HandlePortfolioSignal(w http.ResponseWriter, r *http.Request) {
-    userID := r.Context().Value("user_id").(int)
-    condition := r.URL.Query().Get("pine_condition")
-    if condition == "" {
-        utils.ErrorResponse(w, http.StatusBadRequest, "Missing 'pine_condition' parameter")
-        return
-    }
+	userID := r.Context().Value("user_id").(int)
+	condition := r.URL.Query().Get("pine_condition")
+	if condition == "" {
+		utils.ErrorResponse(w, http.StatusBadRequest, "Missing 'pine_condition' parameter")
+		return
+	}
 
-    positions, err := h.db.GetOpenPositionsByUserID(userID)
-    if err != nil {
-        utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve portfolio positions")
-        return
-    }
+	// Get exchange and interval from query parameters
+	exchange := r.URL.Query().Get("exchange")
+	if exchange == "" {
+		exchange = "NSE"
+	}
+	exchange = strings.ToUpper(exchange)
 
-    if len(positions) == 0 {
-        utils.SuccessResponse(w, "No open positions found in portfolio", nil)
-        return
-    }
+	interval := r.URL.Query().Get("interval")
+	if interval == "" {
+		interval = "5m"
+	}
+	interval = strings.ToLower(interval)
 
-    signalResults := make(map[string]bool)
-    defaultExchange := "NSE"
+	// Validate interval
+	if interval != "5m" && interval != "15m" && interval != "1h" {
+		utils.ErrorResponse(w, http.StatusBadRequest, "Invalid interval. Use 5m, 15m, or 1h")
+		return
+	}
 
-    for _, pos := range positions {
-        symbol := pos.Symbol
-        // --- FIX: Pass condition, symbol, AND the default exchange "NSE" ---
-        isMet, _, err := h.openalgo.EvaluatePineCondition(condition, strings.ToUpper(symbol), defaultExchange)
-        if err != nil {
-            log.Printf("Signal evaluation failed for %s on %s: %v", symbol, defaultExchange, err)
-            signalResults[symbol] = false 
-            continue
-        }
-        signalResults[symbol] = isMet
-    }
+	positions, err := h.db.GetOpenPositionsByUserID(userID)
+	if err != nil {
+		utils.ErrorResponse(w, http.StatusInternalServerError, "Failed to retrieve portfolio positions")
+		return
+	}
 
-    result := map[string]interface{}{
-        "condition": condition,
-        "results":   signalResults,
-    }
+	if len(positions) == 0 {
+		utils.SuccessResponse(w, "No open positions found in portfolio", nil)
+		return
+	}
 
-    utils.SuccessResponse(w, "Portfolio signal evaluation complete", result)
+	signalResults := make(map[string]bool)
+
+	for _, pos := range positions {
+		symbol := pos.Symbol
+		isMet, _, err := h.openalgo.EvaluatePineCondition(interval, condition, strings.ToUpper(symbol), exchange)
+		if err != nil {
+			log.Printf("Signal evaluation failed for %s on %s (%s): %v", symbol, exchange, interval, err)
+			signalResults[symbol] = false 
+			continue
+		}
+		signalResults[symbol] = isMet
+	}
+
+	result := map[string]interface{}{
+		"condition": condition,
+		"exchange":  exchange,
+		"interval":  interval,
+		"results":   signalResults,
+	}
+
+	utils.SuccessResponse(w, "Portfolio signal evaluation complete", result)
 }
 
-
-// HandleSignalTest is the unprotected test route for /signal we added in main.go
+// HandleSignalTest is the unprotected test route for /signal
 func (h *PortfolioHandler) HandleSignalTest(w http.ResponseWriter, r *http.Request) {
 	symbol := r.URL.Query().Get("symbol")
 	condition := r.URL.Query().Get("pine_condition")
-    exchange := r.URL.Query().Get("exchange") // New: read exchange
-    
-    if exchange == "" {
-        exchange = "NSE" // Default exchange
-    }
+	exchange := r.URL.Query().Get("exchange")
+	interval := r.URL.Query().Get("interval")
+
+	// Defaults
+	if exchange == "" {
+		exchange = "NSE"
+	}
+	exchange = strings.ToUpper(exchange)
+
+	if interval == "" {
+		interval = "5m"
+	}
+	interval = strings.ToLower(interval)
 
 	if symbol == "" || condition == "" {
 		utils.ErrorResponse(w, http.StatusBadRequest, "Symbol and pine_condition are required")
 		return
 	}
 
-	// --- FIX: Pass the exchange argument (this was missing) ---
-	isConditionMet, _, err := h.openalgo.EvaluatePineCondition(condition, strings.ToUpper(symbol), strings.ToUpper(exchange))
+	// Validate interval
+	if interval != "5m" && interval != "15m" && interval != "1h" {
+		utils.ErrorResponse(w, http.StatusBadRequest, "Invalid interval. Use 5m, 15m, or 1h")
+		return
+	}
+
+	isConditionMet, indicatorValues, err := h.openalgo.EvaluatePineCondition(interval, condition, strings.ToUpper(symbol), exchange)
 	if err != nil {
 		utils.ErrorResponse(w, http.StatusInternalServerError, "Evaluation failed: "+err.Error())
 		return
 	}
 
-	result := fmt.Sprintf("Condition met: %t (Symbol: %s, Condition: %s, Exchange: %s)", isConditionMet, symbol, condition, exchange)
+	result := map[string]interface{}{
+		"condition_met":    isConditionMet,
+		"symbol":           symbol,
+		"condition":        condition,
+		"exchange":         exchange,
+		"interval":         interval,
+		"indicator_values": indicatorValues,
+	}
+
 	utils.SuccessResponse(w, "Signal evaluation complete", result)
 }
