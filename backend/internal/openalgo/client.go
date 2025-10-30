@@ -500,3 +500,85 @@ func (oa *OpenAlgoClient) EvaluatePineCondition(interval string, condition strin
 	log.Printf("Evaluation complete. Condition met: %t", isConditionMet)
 	return isConditionMet, indicatorValues, nil
 }
+// --- Structs for OpenAlgo Order Status API ---
+type OpenAlgoOrderStatusRequest struct {
+	Apikey   string `json:"apikey"`
+	Strategy string `json:"strategy"`
+	OrderID  string `json:"orderid"`
+}
+
+type OpenAlgoOrderStatusData struct {
+	Action       string  `json:"action"`
+	AveragePrice float64 `json:"average_price"`
+	Exchange     string  `json:"exchange"`
+	OrderStatus  string  `json:"order_status"`
+	OrderID      string  `json:"orderid"`
+	Price        float64 `json:"price"`
+	PriceType    string  `json:"pricetype"`
+	Product      string  `json:"product"`
+	Quantity     string  `json:"quantity"` // Note: The API returns quantity as a string
+	Symbol       string  `json:"symbol"`
+	Timestamp    string  `json:"timestamp"`
+	TriggerPrice float64 `json:"trigger_price"`
+}
+
+type OpenAlgoOrderStatusResponse struct {
+	Status string                  `json:"status"`
+	Data   OpenAlgoOrderStatusData `json:"data"`
+	Error  string                  `json:"error,omitempty"`
+}
+
+// --- METHOD: FetchOrderStatus fetches the status of a specific order ---
+func (oa *OpenAlgoClient) FetchOrderStatus(orderID, strategy string) (*OpenAlgoOrderStatusData, error) {
+	if oa.APIKey == "" {
+		return nil, fmt.Errorf("OpenAlgo API key not configured")
+	}
+
+	statusEndpoint := oa.BaseURL + "/api/v1/orderstatus"
+
+	requestBody := OpenAlgoOrderStatusRequest{
+		Apikey:   oa.APIKey,
+		Strategy: strategy,
+		OrderID:  orderID,
+	}
+
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal order status request: %w", err)
+	}
+
+	resp, err := http.Post(statusEndpoint, "application/json", bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("http post failed for order status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read order status response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		var errResp OpenAlgoOrderStatusResponse
+		if json.Unmarshal(bodyBytes, &errResp) == nil && errResp.Error != "" {
+			return nil, fmt.Errorf("api request failed with status %d: %s", resp.StatusCode, errResp.Error)
+		}
+		return nil, fmt.Errorf("api request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var statusResponse OpenAlgoOrderStatusResponse
+	if err := json.Unmarshal(bodyBytes, &statusResponse); err != nil {
+		log.Printf("Failed to decode order status response: %v. Body: %s", err, string(bodyBytes))
+		return nil, fmt.Errorf("failed to decode order status response: %w. Body: %s", err, string(bodyBytes))
+	}
+
+	if statusResponse.Status != "success" {
+		errMsg := statusResponse.Error
+		if errMsg == "" {
+			errMsg = "api reported status: " + statusResponse.Status
+		}
+		return nil, fmt.Errorf("order status api error: %s", errMsg)
+	}
+
+	return &statusResponse.Data, nil
+}
