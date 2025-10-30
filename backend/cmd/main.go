@@ -9,9 +9,11 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 
+	"strconv"
 	"trading-app/internal/ai"
 	"trading-app/internal/auth"
 	"trading-app/internal/database"
+	"trading-app/internal/email"
 	"trading-app/internal/handlers"
 	"trading-app/internal/openalgo"
 	"trading-app/internal/websocket"
@@ -26,6 +28,15 @@ func main() {
 	openalgoURL := getEnv("OPENALGO_URL", "https://openalgo.mywire.org")
 	openalgoAPIKey := getEnv("OPENALGO_API_KEY", "")
 	abacusAPIKey := getEnv("ABACUS_API_KEY", "")
+
+	// Email configuration
+	smtpHost := getEnv("SMTP_HOST", "")
+	smtpPortStr := getEnv("SMTP_PORT", "587")
+	smtpUsername := getEnv("SMTP_USERNAME", "")
+	smtpPassword := getEnv("SMTP_PASSWORD", "")
+	emailSender := getEnv("EMAIL_SENDER", "")
+	emailRecipient := getEnv("EMAIL_RECIPIENT", "")
+	smtpPort, _ := strconv.Atoi(smtpPortStr)
 
 	// Create data directories
 	if err := os.MkdirAll("./data", 0755); err != nil {
@@ -62,6 +73,9 @@ func main() {
 	// FIX 1: Initialize OpenAlgo client with URL and API Key
 	openalgoClient := openalgo.NewOpenAlgoClient(openalgoURL, openalgoAPIKey)
 
+	// Initialize Email service
+	emailService := email.NewEmailService(smtpHost, smtpPort, smtpUsername, smtpPassword, emailSender)
+
 	// Initialize AI client
 	aiClient := ai.NewAIClient(abacusAPIKey)
 
@@ -80,7 +94,7 @@ func main() {
 	portfolioHandler := handlers.NewPortfolioHandler(db, openalgoClient)
 	backtestHandler := handlers.NewBacktestHandler(db, openalgoClient)
 	// FIX 2: Pass OpenAlgo config to WebSocketHandler
-	wsHandler := handlers.NewWebSocketHandler(hub, db, aiClient, openalgoURL, openalgoAPIKey)
+	wsHandler := handlers.NewWebSocketHandler(hub, db, aiClient, openalgoURL, openalgoAPIKey, emailService, emailRecipient)
 
 	// Setup router
 	r := mux.NewRouter()

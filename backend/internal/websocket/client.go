@@ -2,9 +2,9 @@ package websocket
 
 import (
 	"encoding/json"
-	"math"
 	"fmt"
 	"log"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 	"trading-app/internal/ai"
 	"trading-app/internal/database"
+	"trading-app/internal/email"
 	"trading-app/internal/models"
 	"trading-app/internal/openalgo"
 )
@@ -25,16 +26,18 @@ const (
 )
 
 type Client struct {
-	hub          *Hub
-	conn         *websocket.Conn
-	send         chan []byte
-	userID       int
-	db           *database.DB
-	ai           *ai.AIClient
-	oaClient     *openalgo.OpenAlgoClient
-	autoOrders   map[string]*models.AutoOrder
-	orderMux     sync.Mutex
-	cancellation map[string]chan struct{}
+	hub            *Hub
+	conn           *websocket.Conn
+	send           chan []byte
+	userID         int
+	db             *database.DB
+	ai             *ai.AIClient
+	oaClient       *openalgo.OpenAlgoClient
+	autoOrders     map[string]*models.AutoOrder
+	orderMux       sync.Mutex
+	cancellation   map[string]chan struct{}
+	emailService   *email.EmailService
+	emailRecipient string
 }
 
 type Message struct {
@@ -44,17 +47,19 @@ type Message struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
-func NewClient(hub *Hub, conn *websocket.Conn, userID int, db *database.DB, aiClient *ai.AIClient, baseURL string, apiKey string) *Client {
+func NewClient(hub *Hub, conn *websocket.Conn, userID int, db *database.DB, aiClient *ai.AIClient, baseURL string, apiKey string, emailService *email.EmailService, emailRecipient string) *Client {
 	return &Client{
-		hub:          hub,
-		conn:         conn,
-		send:         make(chan []byte, 256),
-		userID:       userID,
-		db:           db,
-		ai:           aiClient,
-		oaClient:     openalgo.NewOpenAlgoClient(baseURL, apiKey),
-		autoOrders:   make(map[string]*models.AutoOrder),
-		cancellation: make(map[string]chan struct{}),
+		hub:            hub,
+		conn:           conn,
+		send:           make(chan []byte, 256),
+		userID:         userID,
+		db:             db,
+		ai:             aiClient,
+		oaClient:       openalgo.NewOpenAlgoClient(baseURL, apiKey),
+		autoOrders:     make(map[string]*models.AutoOrder),
+		cancellation:   make(map[string]chan struct{}),
+		emailService:   emailService,
+		emailRecipient: emailRecipient,
 	}
 }
 
@@ -63,19 +68,19 @@ func (c *Client) StartAutoOrderMonitoring(symbol, exchange, product, interval, c
 	cancelChan := make(chan struct{})
 
 	order := &models.AutoOrder{
-	ID:        orderID,
-	UserID:    c.userID,
-	Symbol:    symbol,
-	Exchange:  exchange,
-	Product:   product,  // NEW
-	Quantity:  quantity,
-	Action:    action,
-	Interval:  interval,
-	Condition: condition,
-	Status:    "running",
-	CreatedAt: time.Now(),
-	ExpiresAt: expiresAt,
-}
+		ID:        orderID,
+		UserID:    c.userID,
+		Symbol:    symbol,
+		Exchange:  exchange,
+		Product:   product,  // NEW
+		Quantity:  quantity,
+		Action:    action,
+		Interval:  interval,
+		Condition: condition,
+		Status:    "running",
+		CreatedAt: time.Now(),
+		ExpiresAt: expiresAt,
+	}
 
 	c.orderMux.Lock()
 	c.autoOrders[orderID] = order
@@ -101,18 +106,24 @@ func (c *Client) sendError(errMsg string) {
 }
 
 // monitorAndPlaceOrder is the worker function that runs in a separate goroutine.
-// monitorAndPlaceOrder is the worker function that runs in a separate goroutine.
 func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 	// NEW: Add panic recovery
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("🚨 PANIC in monitorAndPlaceOrder for %s: %v", order.Symbol, r)
-			c.sendError(fmt.Sprintf("❌ Auto-Order %s crashed: %v. Please contact support.", order.ID, r))
-			c.removeAutoOrder(order.ID)
+			c.sendError(fmt.Sprintf("❌ Auto-Order %s crashed: %v.", order.ID, r))
+			c.emailService.SendEmail(c.emailRecipient, "Auto-Order Process crashed", fmt.Sprintf("Auto-Order %s crashed: %v", order.ID, r))
+			if time.Now().Before(order.ExpiresAt) {
+				c.sendSystemMessage(fmt.Sprintf(" restarting monitoring for order %s.", order.ID))
+				go c.monitorAndPlaceOrder(order)
+			} else {
+				c.sendSystemMessage(fmt.Sprintf(" order %s has expired and will not be restarted.", order.ID))
+				c.removeAutoOrder(order.ID)
+			}
 		}
 	}()
-	
-	log.Printf("AUTO-ORDER: Monitoring started for %s on %s. Interval: %s. Condition: %s", 
+
+	log.Printf("AUTO-ORDER: Monitoring started for %s on %s. Interval: %s. Condition: %s",
 		order.Symbol, order.Exchange, order.Interval, order.Condition)
 
 	// Retrieve the cancellation channel for this specific order
@@ -126,16 +137,16 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 	}
 
 	// Determine the check delay
-	checkDelay, _ := ParseIntervalDuration(order.Interval) 
+	checkDelay, _ := ParseIntervalDuration(order.Interval)
 
 	// Safety check: Do not allow checks more frequent than 5 seconds
 	if checkDelay < 5*time.Second {
 		checkDelay = 5 * time.Second
 	}
-	
+
 	ticker := time.NewTicker(checkDelay)
 	defer ticker.Stop()
-	
+
 	// FIX: Create expiry timer properly
 	expiryDuration := time.Until(order.ExpiresAt)
 	if expiryDuration <= 0 {
@@ -145,10 +156,10 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 	if expiryDuration > 30*24*time.Hour {
 		expiryDuration = 30 * 24 * time.Hour // Cap at 30 days
 	}
-	
+
 	expiryTimer := time.NewTimer(expiryDuration)
 	defer expiryTimer.Stop()
-	
+
 	// Cleanup function to run when the loop exits
 	defer func() {
 		c.removeAutoOrder(order.ID)
@@ -169,7 +180,7 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 
 		case <-ticker.C:
 			// Time for the next check
-			
+
 			// Safety check for expiry
 			if time.Now().After(order.ExpiresAt) {
 				c.sendSystemMessage(fmt.Sprintf("🕒 Auto-Order %s for %s has EXPIRED. Monitoring stopped.", order.ID, order.Symbol))
@@ -178,7 +189,7 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 
 			// Evaluate condition
 			isMet, valuesMap, err := c.oaClient.EvaluatePineCondition(order.Interval, order.Condition, order.Symbol, order.Exchange)
-			
+
 			if err != nil {
 				log.Printf("AUTO-ORDER: Evaluation error for %s: %v", order.ID, err)
 				// Don't stop monitoring on transient errors - just log and continue
@@ -213,18 +224,82 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 				orderResponse, err := c.oaClient.PlaceOpenAlgoSmartOrder(orderReq)
 
 				if err != nil {
-					c.sendError(fmt.Sprintf("❌ Auto-Order %s FAILED to place order: %v. Monitoring stopped.", order.ID, err))
+					c.sendError(fmt.Sprintf("❌ Auto-Order %s FAILED to place order: %v. Monitoring continues.", order.ID, err))
+					c.emailService.SendEmail(c.emailRecipient, "Auto-Order Execution Failed", fmt.Sprintf("Auto-Order %s failed to place order: %v", order.ID, err))
 				} else {
-					c.sendSystemMessage(fmt.Sprintf("✅ **AUTO ORDER EXECUTED** for %s on %s!\n\n### Trigger Values:\n%s\n**Order ID**: %s\n\nMonitoring stopped.",
+					c.sendSystemMessage(fmt.Sprintf("✅ **AUTO ORDER EXECUTED** for %s on %s!\n\n### Trigger Values:\n%s\n**Order ID**: %s\n\nMonitoring continues.",
 						order.Symbol, order.Exchange, indicatorSummary, orderResponse.Data.OrderID))
+					c.emailService.SendEmail(c.emailRecipient, "Auto-Order Executed", fmt.Sprintf("Auto-Order %s executed for %s on %s.", order.ID, order.Symbol, order.Exchange))
+					go c.pollOrderStatus(order.ID, orderResponse.Data.OrderID)
 				}
-				return
 			}
 		}
 	}
 }
 
+// pollOrderStatus checks the status of a submitted order and notifies on failure.
+func (c *Client) pollOrderStatus(autoOrderID, brokerOrderID string) {
+	const maxRetries = 5
+	const retryInterval = 15 * time.Second
 
+	for i := 0; i < maxRetries; i++ {
+		time.Sleep(retryInterval)
+
+		// Ensure the original auto-order still exists before checking status
+		c.orderMux.Lock()
+		autoOrder, exists := c.autoOrders[autoOrderID]
+		c.orderMux.Unlock()
+		if !exists {
+			log.Printf("Order status polling for %s stopped as the auto-order no longer exists.", autoOrderID)
+			return
+		}
+
+		status, err := c.oaClient.FetchOrderStatus(brokerOrderID, "auto_chat")
+		if err != nil {
+			log.Printf("Error fetching order status for %s: %v", brokerOrderID, err)
+			continue // Don't notify on temporary fetch errors
+		}
+
+		log.Printf("Order %s status for %s (%s): %s", brokerOrderID, autoOrder.Symbol, autoOrder.Action, status.OrderStatus)
+
+		switch strings.ToLower(status.OrderStatus) {
+		case "complete":
+			// Order executed successfully, no need to poll further.
+			return
+		case "rejected", "cancelled":
+			// Terminal failure states, notify the user.
+			failureMsg := fmt.Sprintf(
+				"⚠️ **Order Failure Notice** ⚠️\n\nYour auto-order for **%s** (%s) with broker ID **%s** was **%s**.",
+				autoOrder.Symbol, autoOrder.Action, brokerOrderID, strings.ToUpper(status.OrderStatus),
+			)
+			c.sendSystemMessage(failureMsg)
+			c.emailService.SendEmail(
+				c.emailRecipient,
+				fmt.Sprintf("Auto-Order %s for %s was %s", autoOrder.ID, autoOrder.Symbol, strings.ToUpper(status.OrderStatus)),
+				failureMsg,
+			)
+			return // Stop polling on terminal status.
+		}
+	}
+
+	// If the loop finishes without a "complete" or "rejected" status, notify as unresolved.
+	c.orderMux.Lock()
+	autoOrder, exists := c.autoOrders[autoOrderID]
+	c.orderMux.Unlock()
+	if !exists {
+		return // The original order was cancelled in the meantime.
+	}
+	unresolvedMsg := fmt.Sprintf(
+		"⚠️ **Order Status Unresolved** ⚠️\n\nYour auto-order for **%s** (%s) with broker ID **%s** could not be confirmed as 'complete' after several checks. Please verify its status manually.",
+		autoOrder.Symbol, autoOrder.Action, brokerOrderID,
+	)
+	c.sendSystemMessage(unresolvedMsg)
+	c.emailService.SendEmail(
+		c.emailRecipient,
+		fmt.Sprintf("Auto-Order %s for %s - Status Unresolved", autoOrder.ID, autoOrder.Symbol),
+		unresolvedMsg,
+	)
+}
 
 // removeAutoOrder cleans up the tracking maps after an order is executed, cancelled, or expired.
 func (c *Client) removeAutoOrder(orderID string) {
@@ -235,26 +310,26 @@ func (c *Client) removeAutoOrder(orderID string) {
 		log.Printf("AUTO-ORDER: Order %s already removed", orderID)
 		return
 	}
-	
+
 	// Use sync.Once to ensure cleanup happens exactly once
 	order.CleanupOnce.Do(func() {
 		log.Printf("AUTO-ORDER: Cleaning up order %s", orderID)
-		
+
 		// Remove from map first
 		delete(c.autoOrders, orderID)
-		
+
 		// Close channel safely
 		if ch, ok := c.cancellation[orderID]; ok {
 			select {
 			case <-ch:
-				// Already closed
+			// Already closed
 			default:
 				close(ch)
 			}
 			delete(c.cancellation, orderID)
 		}
 	})
-	
+
 	c.orderMux.Unlock()
 }
 
@@ -451,81 +526,81 @@ func (c *Client) handleTradingCommand(command string) {
 			}
 
 		case "/buy_smart", "/sell_smart":
-	if len(parts) >= 3 {
-		action := "BUY"
-		if cmd == "/sell_smart" {
-			action = "SELL"
-		}
+			if len(parts) >= 3 {
+				action := "BUY"
+				if cmd == "/sell_smart" {
+					action = "SELL"
+				}
 
-		symbol := strings.ToUpper(parts[1])
-		quantityStr := parts[2]
+				symbol := strings.ToUpper(parts[1])
+				quantityStr := parts[2]
 
-		exchange := "NSE"
-		priceType := "MARKET"
-		product := "MIS"  // Changed here
-		price := 0.0
+				exchange := "NSE"
+				priceType := "MARKET"
+				product := "MIS"  // Changed here
+				price := 0.0
 
-			if len(parts) >= 4 {
-	exchange = strings.ToUpper(parts[3])
-}
+				if len(parts) >= 4 {
+					exchange = strings.ToUpper(parts[3])
+				}
 
-if len(parts) >= 5 {
-	// Check if it's a product type (MIS/NRML/CNC)
-	param := strings.ToUpper(parts[4])
-	if param == "MIS" || param == "NRML" || param == "CNC" {
-		product = param
-		// Check for price type in next parameter
-		if len(parts) >= 6 {
-			pType := strings.ToUpper(parts[5])
-			if pType == "LIMIT" || pType == "MARKET" {
-				priceType = pType
-			}
-		}
-		// Handle limit price
-		if priceType == "LIMIT" && len(parts) >= 7 {
-			priceStr := parts[6]
-			p, err := strconv.ParseFloat(priceStr, 64)
-			if err != nil {
-				responseContent = fmt.Sprintf("Invalid limit price '%s'. Must be a number.", priceStr)
-				break
-			}
-			price = p
-		}
-	} else if param == "LIMIT" || param == "MARKET" {
-		// Old format: price type without product (defaults to MIS)
-		priceType = param
-		if priceType == "LIMIT" && len(parts) >= 6 {
-			priceStr := parts[5]
-			p, err := strconv.ParseFloat(priceStr, 64)
-			if err != nil {
-				responseContent = fmt.Sprintf("Invalid limit price '%s'. Must be a number.", priceStr)
-				break
-			}
-			price = p
-		}
-	}
-}
+				if len(parts) >= 5 {
+					// Check if it's a product type (MIS/NRML/CNC)
+					param := strings.ToUpper(parts[4])
+					if param == "MIS" || param == "NRML" || param == "CNC" {
+						product = param
+						// Check for price type in next parameter
+						if len(parts) >= 6 {
+							pType := strings.ToUpper(parts[5])
+							if pType == "LIMIT" || pType == "MARKET" {
+								priceType = pType
+							}
+						}
+						// Handle limit price
+						if priceType == "LIMIT" && len(parts) >= 7 {
+							priceStr := parts[6]
+							p, err := strconv.ParseFloat(priceStr, 64)
+							if err != nil {
+								responseContent = fmt.Sprintf("Invalid limit price '%s'. Must be a number.", priceStr)
+								break
+							}
+							price = p
+						}
+					} else if param == "LIMIT" || param == "MARKET" {
+						// Old format: price type without product (defaults to MIS)
+						priceType = param
+						if priceType == "LIMIT" && len(parts) >= 6 {
+							priceStr := parts[5]
+							p, err := strconv.ParseFloat(priceStr, 64)
+							if err != nil {
+								responseContent = fmt.Sprintf("Invalid limit price '%s'. Must be a number.", priceStr)
+								break
+							}
+							price = p
+						}
+					}
+				}
 
-quantity, err := strconv.Atoi(quantityStr)
-if err != nil || quantity <= 0 {
-	responseContent = "Invalid quantity. Must be a positive number."
-	break
-}
+				quantity, err := strconv.Atoi(quantityStr)
+				if err != nil || quantity <= 0 {
+					responseContent = "Invalid quantity. Must be a positive number."
+					break
+				}
 
 				log.Printf("Placing Smart Order: Action=%s, Symbol=%s, Qty=%d, Exchange=%s, Type=%s, Price=%.2f",
 					action, symbol, quantity, exchange, priceType, price)
 
 				orderReq := &openalgo.OpenAlgoSmartOrderRequest{
-					Strategy:    "manual_chat",
-					Symbol:      symbol,
-					Exchange:    exchange,
-					Action:      action,
-					Pricetype:   priceType,
-					Product:     product,  // USE THE VARIABLE
-					Quantity:    quantity,
+					Strategy:     "manual_chat",
+					Symbol:       symbol,
+					Exchange:     exchange,
+					Action:       action,
+					Pricetype:    priceType,
+					Product:      product,  // USE THE VARIABLE
+					Quantity:     quantity,
 					PositionSize: 0,
-					Price:       price,
-}
+					Price:        price,
+				}
 
 				orderResponse, err := c.oaClient.PlaceOpenAlgoSmartOrder(orderReq)
 				if err != nil {
@@ -607,7 +682,7 @@ if err != nil || quantity <= 0 {
 			if len(parts) < 8 {  // CHANGED FROM 7 TO 8
 				responseContent = "Usage: `/buy_smart_auto <SYMBOL> <QTY> <EXCHANGE> <PRODUCT> <INTERVAL> <VALIDITY> <CONDITION...>`. Example: `/buy_smart_auto TCS 10 NSE NRML 5m 2h \"RSI14 < 30\"`"
 				break
-}
+			}
 
 			action := "BUY"
 			if cmd == "/sell_smart_auto" {
@@ -626,7 +701,7 @@ if err != nil || quantity <= 0 {
 			if product != "MIS" && product != "NRML" && product != "CNC" {
 				responseContent = fmt.Sprintf("Invalid product type: %s. Use MIS, NRML, or CNC.", product)
 				break
-}
+			}
 
 			quantity, err := strconv.Atoi(quantityStr)
 			if err != nil || quantity <= 0 {

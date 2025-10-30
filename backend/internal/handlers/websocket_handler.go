@@ -8,6 +8,7 @@ import (
 	"trading-app/internal/ai"
 	"trading-app/internal/auth"
 	"trading-app/internal/database"
+	"trading-app/internal/email"
 	wsocket "trading-app/internal/websocket"
 )
 
@@ -25,15 +26,19 @@ type WebSocketHandler struct {
 	aiClient       *ai.AIClient
 	openalgoURL    string
 	openalgoAPIKey string
+	emailService   *email.EmailService
+	emailRecipient string
 }
 
-func NewWebSocketHandler(hub *wsocket.Hub, db *database.DB, aiClient *ai.AIClient, openalgoURL string, openalgoAPIKey string) *WebSocketHandler {
+func NewWebSocketHandler(hub *wsocket.Hub, db *database.DB, aiClient *ai.AIClient, openalgoURL string, openalgoAPIKey string, emailService *email.EmailService, emailRecipient string) *WebSocketHandler {
 	return &WebSocketHandler{
 		hub:            hub,
 		db:             db,
 		aiClient:       aiClient,
 		openalgoURL:    openalgoURL,
 		openalgoAPIKey: openalgoAPIKey,
+		emailService:   emailService,
+		emailRecipient: emailRecipient,
 	}
 }
 
@@ -68,6 +73,8 @@ func (h *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Reques
 		h.aiClient,
 		h.openalgoURL,
 		h.openalgoAPIKey,
+		h.emailService,
+		h.emailRecipient,
 	)
 
 	// Register client
