@@ -2,7 +2,6 @@ package email
 
 import (
 	"log"
-
 	"gopkg.in/gomail.v2"
 )
 
@@ -20,6 +19,10 @@ func NewEmailService(host string, port int, username, password, sender string) *
 }
 
 func (s *EmailService) SendEmail(recipient, subject, body string) error {
+	if s.dialer == nil {
+		log.Printf("Email service not configured. Skipping email to %s", recipient)
+		return nil // Don't treat as a hard error
+	}
 	m := gomail.NewMessage()
 	m.SetHeader("From", s.sender)
 	m.SetHeader("To", recipient)
@@ -30,5 +33,6 @@ func (s *EmailService) SendEmail(recipient, subject, body string) error {
 		log.Printf("Failed to send email: %v", err)
 		return err
 	}
+	log.Printf("Email sent successfully to %s", recipient)
 	return nil
 }

@@ -38,7 +38,6 @@ func NewAIClient(apiKey string) *AIClient {
 }
 
 // BuildContext creates a simple string representation of the chat history.
-// For Gemini, we will transform this into a structured history.
 func (c *AIClient) BuildContext(history []*models.ChatMessage, fileContext string) string {
 	var context strings.Builder
 	if fileContext != "" {
@@ -64,8 +63,6 @@ func (c *AIClient) GetChatResponse(userMessage string, contextStr string) (strin
 	model := c.genaiClient.GenerativeModel(geminiModel)
 	cs := model.StartChat()
 
-	// Convert the string context back into a structured chat history for Gemini.
-	// This is a simplified approach; more advanced context management could be implemented.
 	lines := strings.Split(contextStr, "\n")
 	for _, line := range lines {
 		parts := strings.SplitN(line, ": ", 2)
@@ -75,7 +72,6 @@ func (c *AIClient) GetChatResponse(userMessage string, contextStr string) (strin
 		role := strings.ToLower(parts[0])
 		content := parts[1]
 
-		// Gemini uses "user" and "model" roles.
 		if role == "user" {
 			cs.History = append(cs.History, &genai.Content{
 				Parts: []genai.Part{genai.Text(content)},
@@ -94,7 +90,6 @@ func (c *AIClient) GetChatResponse(userMessage string, contextStr string) (strin
 		return "", fmt.Errorf("failed to get response from Gemini: %w", err)
 	}
 
-	// Extract and concatenate the text from the response.
 	var responseText strings.Builder
 	for _, cand := range resp.Candidates {
 		if cand.Content != nil {
