@@ -27,7 +27,7 @@ func main() {
 	// FIX: Ensure these are declared correctly for use below
 	openalgoURL := getEnv("OPENALGO_URL", "https://openalgo.mywire.org")
 	openalgoAPIKey := getEnv("OPENALGO_API_KEY", "")
-	abacusAPIKey := getEnv("ABACUS_API_KEY", "")
+	geminiAPIKey := getEnv("GEMINI_API_KEY", "")
 
 	// Email configuration
 	smtpHost := getEnv("SMTP_HOST", "")
@@ -77,7 +77,7 @@ func main() {
 	emailService := email.NewEmailService(smtpHost, smtpPort, smtpUsername, smtpPassword, emailSender)
 
 	// Initialize AI client
-	aiClient := ai.NewAIClient(abacusAPIKey)
+	aiClient := ai.NewAIClient(geminiAPIKey)
 
 	// Initialize WebSocket hub
 	hub := websocket.NewHub()
