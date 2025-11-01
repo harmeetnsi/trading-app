@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	geminiModel = "gemini-1.5-flash-latest"
+	geminiModel = "gemini-1.5-flash"
 )
 
 // AIClient is a client for interacting with the Google Gemini API.
