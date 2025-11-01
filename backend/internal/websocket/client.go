@@ -93,6 +93,14 @@ func (c *Client) StartAutoOrderMonitoring(symbol, exchange, product, interval, c
 }
 
 func (c *Client) sendError(errMsg string) {
+	// BUG FIX: Add a recover block to prevent panics from crashing the app
+	// if the client channel is already closed.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Recovered in sendError: %v", r)
+		}
+	}()
+
 	errorMsg := Message{
 		Type: "error",
 		Data: map[string]string{"message": errMsg},
@@ -334,6 +342,14 @@ func (c *Client) removeAutoOrder(orderID string) {
 }
 
 func (c *Client) sendSystemMessage(content string) {
+	// BUG FIX: Add a recover block to prevent panics from crashing the app
+	// if the client channel is already closed.
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Recovered in sendSystemMessage: %v", r)
+		}
+	}()
+
 	msg := Message{
 		Type:    "chat",
 		Content: content,
@@ -696,6 +712,9 @@ func (c *Client) handleTradingCommand(command string) {
 			interval := strings.ToLower(parts[5])  // SHIFTED
 			validityStr := strings.ToLower(parts[6])  // SHIFTED
 			condition := strings.Join(parts[7:], " ")  // SHIFTED
+
+			// BUG FIX: Trim quotes from the condition string to ensure proper evaluation.
+			condition = strings.Trim(condition, "\"")
 
 			// Validate product
 			if product != "MIS" && product != "NRML" && product != "CNC" {
