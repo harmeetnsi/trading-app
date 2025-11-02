@@ -462,6 +462,11 @@ func (c *Client) handleChatMessage(msg *Message) {
 }
 
 func (c *Client) handleTradingCommand(command string) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("Recovered in handleTradingCommand: %v", r)
+		}
+	}()
 	typingMsg := Message{Type: "typing", Data: map[string]bool{"is_typing": true}}
 	typingBytes, _ := json.Marshal(typingMsg)
 	c.send <- typingBytes
