@@ -218,6 +218,9 @@ func (oa *OpenAlgoClient) PlaceOpenAlgoSmartOrder(orderReq *OpenAlgoSmartOrderRe
 		return nil, fmt.Errorf("failed to read smart order response body: %w", err)
 	}
 
+	// DIAGNOSTIC LOG: Print the raw response body
+	log.Printf("DEBUG: Raw response from placesmartorder: %s", string(bodyBytes))
+
 	if resp.StatusCode != http.StatusOK {
 		var errResp OpenAlgoSmartOrderResponse
 		if json.Unmarshal(bodyBytes, &errResp) == nil && (errResp.Error != "" || errResp.Message != "") {
