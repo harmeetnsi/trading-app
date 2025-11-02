@@ -153,7 +153,8 @@ type AutoOrder struct {
 	ExpiresAt time.Time `json:"expires_at"` // Defines when monitoring stops
 	
 	// State management fields
-	State       OrderState
-	StateMux    sync.RWMutex
-	CleanupOnce sync.Once
+	State          OrderState
+	ConditionState bool // Tracks the last known state of the condition (true/false)
+	StateMux       sync.RWMutex
+	CleanupOnce    sync.Once
 }

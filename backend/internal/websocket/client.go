@@ -181,7 +181,12 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 				continue
 			}
 
-			if isMet {
+			// State transition logic: only fire when the condition *becomes* true
+			if isMet && !order.ConditionState {
+				order.StateMux.Lock()
+				order.ConditionState = true
+				order.StateMux.Unlock()
+
 				var indicatorSummary strings.Builder
 				for name, value := range valuesMap {
 					if math.IsNaN(value) || math.IsInf(value, 0) {
@@ -192,27 +197,37 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 				}
 
 				orderReq := &openalgo.OpenAlgoSmartOrderRequest{
-					Strategy:     "auto_chat",
-					Symbol:       order.Symbol,
-					Exchange:     order.Exchange,
-					Action:       order.Action,
-					Pricetype:    "MARKET",
-					Product:      order.Product,
-					Quantity:     order.Quantity,
+					Strategy:  "auto_chat",
+					Symbol:    order.Symbol,
+					Exchange:  order.Exchange,
+					Action:    order.Action,
+					Pricetype: "MARKET",
+					Product:   order.Product,
+					Quantity:  order.Quantity,
 				}
 
-				log.Printf("AUTO-ORDER: Placing order for %s (ID: %s)", order.Symbol, order.ID)
+				log.Printf("AUTO-ORDER: Condition met for %s. Placing order.", order.ID)
 				orderResponse, err := c.oaClient.PlaceOpenAlgoSmartOrder(orderReq)
 
 				if err != nil {
 					c.sendError(fmt.Sprintf("❌ Auto-Order %s FAILED to place order: %v. Monitoring continues.", order.ID, err))
 					c.emailService.SendEmail(c.emailRecipient, "Auto-Order Execution Failed", fmt.Sprintf("Auto-Order %s failed to place order: %v", order.ID, err))
 				} else {
-					c.sendSystemMessage(fmt.Sprintf("✅ **AUTO ORDER EXECUTED** for %s on %s!\n\n### Trigger Values:\n%s\n**Order ID**: %s\n\nMonitoring continues.",
-						order.Symbol, order.Exchange, indicatorSummary.String(), orderResponse.Data.OrderID))
+					brokerID := orderResponse.Data.OrderID
+					if brokerID == "" {
+						log.Printf("CRITICAL: Broker Order ID is empty for auto-order %s. Status polling will fail.", order.ID)
+					}
+					c.sendSystemMessage(fmt.Sprintf("✅ **AUTO ORDER EXECUTED** for %s on %s!\n\n### Trigger Values:\n%s\n**Broker ID**: %s\n\nMonitoring continues.",
+						order.Symbol, order.Exchange, indicatorSummary.String(), brokerID))
 					c.emailService.SendEmail(c.emailRecipient, "Auto-Order Executed", fmt.Sprintf("Auto-Order %s executed for %s on %s.", order.ID, order.Symbol, order.Exchange))
-					go c.pollOrderStatus(order.ID, orderResponse.Data.OrderID)
+					go c.pollOrderStatus(order.ID, brokerID)
 				}
+			} else if !isMet && order.ConditionState {
+				// Condition is no longer met, reset the state so it can fire again
+				log.Printf("AUTO-ORDER: Condition for %s is no longer met. Resetting state.", order.ID)
+				order.StateMux.Lock()
+				order.ConditionState = false
+				order.StateMux.Unlock()
 			}
 		}
 	}
