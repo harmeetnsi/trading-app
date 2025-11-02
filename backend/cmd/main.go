@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
 	"github.com/rs/cors"
 	"trading-app/internal/ai"
 	"trading-app/internal/auth"
@@ -19,6 +20,14 @@ import (
 )
 
 func main() {
+	// Load .env file
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Warning: .env file not found. Using environment variables.")
+	} else {
+		log.Println("Loaded configuration from .env file.")
+	}
+
 	// Load environment variables
 	dbPath := getEnv("DB_PATH", "/root/trading-app/backend/data/trading.db")
 	uploadDir := getEnv("UPLOAD_DIR", "./data/uploads")
