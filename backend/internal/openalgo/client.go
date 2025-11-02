@@ -239,24 +239,49 @@ func (oa *OpenAlgoClient) PlaceOpenAlgoSmartOrder(orderReq *OpenAlgoSmartOrderRe
 		return nil, fmt.Errorf("api request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var orderResponse OpenAlgoSmartOrderResponse
-	if err := json.Unmarshal(bodyBytes, &orderResponse); err != nil {
-		log.Printf("Failed to decode smart order response: %v. Body: %s", err, string(bodyBytes))
+	// --- Manual JSON Parsing for Robustness ---
+	var rawResponse map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &rawResponse); err != nil {
+		log.Printf("Failed to decode smart order response into raw map: %v. Body: %s", err, string(bodyBytes))
 		return nil, fmt.Errorf("failed to decode smart order response: %w. Body: %s", err, string(bodyBytes))
 	}
 
-	if orderResponse.Status != "success" {
-		errMsg := orderResponse.Message
+	// Check status from the raw map
+	status, _ := rawResponse["status"].(string)
+	if status != "success" {
+		message, _ := rawResponse["message"].(string)
+		errorMsg, _ := rawResponse["error"].(string)
+		errMsg := message
 		if errMsg == "" {
-			errMsg = orderResponse.Error
+			errMsg = errorMsg
 		}
 		if errMsg == "" {
-			errMsg = "smart order rejected by OpenAlgo (status: " + orderResponse.Status + ")"
+			errMsg = "smart order rejected by OpenAlgo (status: " + status + ")"
 		}
 		return nil, fmt.Errorf("%s", errMsg)
 	}
 
-	return &orderResponse, nil
+	// Manually extract the orderid
+	var orderID string
+	if data, ok := rawResponse["data"].(map[string]interface{}); ok {
+		if id, ok := data["orderid"].(string); ok {
+			orderID = id
+		}
+	}
+
+	if orderID == "" {
+		log.Printf("CRITICAL: 'orderid' not found or not a string in the response data. Full response: %s", string(bodyBytes))
+	}
+
+	// Construct the final response object
+	orderResponse := &OpenAlgoSmartOrderResponse{
+		Status:  status,
+		Message: rawResponse["message"].(string),
+		Data:    OpenAlgoSmartOrderData{OrderID: orderID},
+		Error:   rawResponse["error"].(string),
+	}
+
+	return orderResponse, nil
 }
 
 // --- METHOD: FetchOrderStatus fetches the status of a specific order ---

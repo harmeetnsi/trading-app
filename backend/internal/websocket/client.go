@@ -210,8 +210,23 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 				orderResponse, err := c.oaClient.PlaceOpenAlgoSmartOrder(orderReq)
 
 				if err != nil {
-					c.sendError(fmt.Sprintf("❌ Auto-Order %s FAILED to place order: %v. Monitoring continues.", order.ID, err))
-					c.emailService.SendEmail(c.emailRecipient, "Auto-Order Execution Failed", fmt.Sprintf("Auto-Order %s failed to place order: %v", order.ID, err))
+					// On failure, cancel the auto-order immediately
+					errMsg := fmt.Sprintf("❌ Auto-Order %s FAILED to place order: %v. The auto-order has been CANCELLED.", order.ID, err)
+					c.sendError(errMsg)
+					c.emailService.SendEmail(c.emailRecipient, "Auto-Order CANCELLED Due to Failure", errMsg)
+					// Use a goroutine to not block the current loop
+					go func() {
+						c.orderMux.Lock()
+						if ch, ok := c.cancellation[order.ID]; ok {
+							select {
+							case <-ch: // Already closed
+							default:
+								close(ch)
+							}
+						}
+						c.orderMux.Unlock()
+					}()
+					return // Stop the monitoring loop
 				} else {
 					brokerID := orderResponse.Data.OrderID
 					if brokerID == "" {
