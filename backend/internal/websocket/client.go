@@ -228,14 +228,26 @@ func (c *Client) monitorAndPlaceOrder(order *models.AutoOrder) {
 					}()
 					return // Stop the monitoring loop
 				} else {
-					brokerID := orderResponse.Data.OrderID
+					// Safely access the broker ID from the already parsed response
+					brokerID := ""
+					if orderResponse != nil && orderResponse.Data.OrderID != "" {
+						brokerID = orderResponse.Data.OrderID
+					}
+
 					if brokerID == "" {
 						log.Printf("CRITICAL: Broker Order ID is empty for auto-order %s. Status polling will fail.", order.ID)
+						// Even if brokerID is empty, we must send a success message so the user knows the trigger fired.
+						// The user will see that the Broker ID is missing.
 					}
+
 					c.sendSystemMessage(fmt.Sprintf("✅ **AUTO ORDER EXECUTED** for %s on %s!\n\n### Trigger Values:\n%s\n**Broker ID**: %s\n\nMonitoring continues.",
 						order.Symbol, order.Exchange, indicatorSummary.String(), brokerID))
 					c.emailService.SendEmail(c.emailRecipient, "Auto-Order Executed", fmt.Sprintf("Auto-Order %s executed for %s on %s.", order.ID, order.Symbol, order.Exchange))
-					go c.pollOrderStatus(order.ID, brokerID)
+
+					// Only start polling if we have a valid broker ID
+					if brokerID != "" {
+						go c.pollOrderStatus(order.ID, brokerID)
+					}
 				}
 			} else if !isMet && order.ConditionState {
 				// Condition is no longer met, reset the state so it can fire again
