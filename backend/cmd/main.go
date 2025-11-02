@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/gorilla/mux"
 	"github.com/rs/cors"
 	"trading-app/internal/ai"
@@ -19,7 +20,13 @@ import (
 )
 
 func main() {
-	// Load environment variables
+	// Load environment variables from .env file
+	if err := godotenv.Load(); err != nil {
+		log.Printf("WARNING: Error loading .env file: %v", err)
+	} else {
+		log.Println(".env file loaded successfully")
+	}
+
 	dbPath := getEnv("DB_PATH", "/root/trading-app/backend/data/trading.db")
 	uploadDir := getEnv("UPLOAD_DIR", "./data/uploads")
 	port := getEnv("PORT", "8080")
