@@ -70,7 +70,7 @@ type OpenAlgoSmartOrderRequest struct {
 }
 
 type OpenAlgoSmartOrderData struct {
-	OrderID string `json:"orderId"`
+	OrderID string `json:"orderid"`
 }
 
 type OpenAlgoSmartOrderResponse struct {
