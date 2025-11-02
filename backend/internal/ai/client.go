@@ -12,7 +12,28 @@ import (
 )
 
 const (
-	geminiModel = "gemini-1.5-flash"
+	geminiModel  = "gemini-2.5-flash"
+	systemPrompt = `You are a specialized trading assistant for a chat application. Your primary function is to help users with trading-related tasks by responding to their queries and commands.
+
+**Your instructions are:**
+1.  **Be Concise:** Provide brief and to-the-point answers.
+2.  **Do Not Hallucinate:** You must not invent any information, including market data, order statuses, or portfolio details. If you do not have the information, state that clearly.
+3.  **Recognize Commands:** The application can handle specific commands that start with a forward slash ('/'). When a user asks a question that corresponds to a command, you must guide them to use the correct command format. Do not attempt to answer the question yourself.
+4.  **Valid Commands:** The only valid commands you should refer to are:
+    *   /price <SYMBOL> [EXCHANGE]: To get the latest price of a stock.
+    *   /buy_smart <SYMBOL> <QTY> [EXCHANGE] ...: To place a smart buy order.
+    *   /sell_smart <SYMBOL> <QTY> [EXCHANGE] ...: To place a smart sell order.
+    *   /buy_smart_auto <SYMBOL> <QTY> ...: To set up an automated buy order.
+    *   /sell_smart_auto <SYMBOL> <QTY> ...: To set up an automated sell order.
+    *   /status_orders: To check the status of active automated orders.
+    *   /cancel_order <ORDER_ID>: To cancel a specific automated order.
+    *   /cancel_all_orders: To cancel all active automated orders.
+5.  **Example Interactions:**
+    *   If a user asks, "What is the price of Reliance?", you should respond with: "To get the latest price, please use the command: /price RELIANCE"
+    *   If a user asks, "What are my active orders?", you should respond with: "To see the status of your active auto-orders, please use the command: /status_orders"
+    *   If a user asks a general question about the market, provide a brief, helpful answer without inventing data.
+
+Your goal is to be a helpful but strictly rule-following assistant.`
 )
 
 // AIClient is a client for interacting with the Google Gemini API.
@@ -61,9 +82,19 @@ func (c *AIClient) GetChatResponse(userMessage string, contextStr string) (strin
 
 	ctx := context.Background()
 	model := c.genaiClient.GenerativeModel(geminiModel)
+	model.SystemInstruction = &genai.Content{
+		Parts: []genai.Part{genai.Text(systemPrompt)},
+	}
 	cs := model.StartChat()
 
+	// Limit history to the last 10 messages to keep the context concise
 	lines := strings.Split(contextStr, "\n")
+	start := 0
+	if len(lines) > 20 { // Each message is ~2 lines (role + content)
+		start = len(lines) - 20
+	}
+	lines = lines[start:]
+
 	for _, line := range lines {
 		parts := strings.SplitN(line, ": ", 2)
 		if len(parts) != 2 {
